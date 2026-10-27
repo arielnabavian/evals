@@ -9,6 +9,7 @@ from strands import Agent
 from strands_evals import Case, Experiment
 from strands_evals.evaluators import Evaluator
 from strands_evals.optimization import (
+    AtLeast,
     Block,
     Choice,
     Float,
@@ -145,3 +146,22 @@ def test_a_text_that_never_varies_in_depth_is_left_out(tmp_path):
     result = effects.fit(tmp_path)
     assert result["omitted"] == [{"key": "system_prompt", "why": "text"}] and result["messages"] == ["no choice varies"]
 
+
+@needs_bayesbench
+def test_a_metric_that_is_an_objective_and_a_constraint_has_its_effects_once(tmp_path):
+    experiment = Experiment(cases=[Case(name="sea", input="x"), Case(name="city", input="y")], evaluators=[Score()])
+    study = Study(
+        agent=create,
+        experiment=experiment,
+        objectives=Maximize("Score"),
+        constraints=[AtLeast("Score", 0.4)],  # a floor on the objective's own metric
+        repetitions=2,
+        search=Search(blocks=[Block(Optuna(lambda: optuna.samplers.RandomSampler(seed=1)), MODE_CHOICE, JITTER)]),
+        record=tmp_path,
+        log=None,
+    )
+    study.optimize(iterations=12)
+    result = json.loads((tmp_path / "effects.json").read_text())
+    assert [g["role"] for g in result["goals"]] == ["objective", "constraint"]  # both goals are stated
+    levels = [(e["key"], e["level"]) for e in result["metrics"]["Score"]["effects"]]
+    assert levels and len(levels) == len(set(levels))  # each effect once

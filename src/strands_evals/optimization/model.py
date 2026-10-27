@@ -656,7 +656,8 @@ def effects_json(fit_: Fit, projection: Projection, computed_at: str) -> dict[st
         {"role": "constraint", "index": i, "metric": c.metric, "better": "lower" if isinstance(c, AtMost) else "higher"}
         for i, c in enumerate(projection.constraints)
     ]
-    found = effects(fit_, [(g["metric"], g["better"]) for g in goals])
+    # once per metric and direction: a metric both optimized and constrained (a floor on the reward) is one model
+    found = effects(fit_, list(dict.fromkeys((g["metric"], g["better"]) for g in goals)))
     metrics = {}
     for metric, model in fit_.metrics.items():
         metrics[metric] = {
