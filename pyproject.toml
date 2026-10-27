@@ -41,6 +41,16 @@ packages = ["src/strands_evals"]
 strands-evals = "strands_evals.cli:main"
 
 [project.optional-dependencies]
+# strands_evals.optimization: TPE (optuna), the reflection templates (jinja2), and the model a study decides with
+# (numpy, scipy and BayesBench). BayesBench is not on PyPI and its repository is not public yet; with access:
+# pip install "bayesbench @ git+https://github.com/nonatofabio/bayesbench@fb2d6385d36fcbaabce258b791466a98f263b382"
+# Without it a study decides with measured means (src/strands_evals/optimization/README.md, "Installing").
+optimization = [
+    "optuna>=5.0.0,<6.0.0",
+    "jinja2>=3.0.0,<4.0.0",
+    "numpy>=1.26.0,<3.0.0",
+    "scipy>=1.11.0,<2.0.0",
+]
 test = [
     "pytest>=8.0.0,<10.0.0",
     "pytest-cov>=7.0.0,<8.0.0",

@@ -17,3 +17,6 @@ report_files
 *.DS_Store*
 uv.lock
 .claude
+
+# strands_evals.optimization records written by the examples
+studies/

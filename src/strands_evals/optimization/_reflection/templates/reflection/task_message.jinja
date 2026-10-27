@@ -1,0 +1,120 @@
+Write a new version of the parameters below, so that the agent does better on this study's goal. You have two kinds of evidence: the versions measured so far, and the current version's conversations.
+
+## The versions measured so far
+
+{{ versions | length }} versions, best first for this study's goal{% if limits %} (its limits: {{ limits | join("; ") }}){% endif %}. Each version's results are its means over all of its conversations. The current version (marked ←) is the one whose conversations are in the trajectory folder. Each version's parameters, in full, are in `{{ versions_folder }}`: one file per version, named by its rank.
+
+| Rank | Version | Built from | Changed | {% for m in goal_metrics %}{{ m }} | {% endfor %}{% if limits %}Meets the limits | {% endif %}Conversations |
+|---|---|---|---|{% for m in goal_metrics %}---|{% endfor %}{% if limits %}---|{% endif %}---|
+{% for v in versions %}| {{ v["rank"] if v["rank"] is not none else "-" }} | {{ v["number"] }}{% if v["current"] %} ←{% endif %}{% if v["baseline"] %} (baseline){% endif %} | {{ v["from"] if v["from"] is not none else "-" }} | {{ v["changed"] | join(", ") if v["changed"] else "-" }} | {% for c in v["cells"] %}{{ c }} | {% endfor %}{% if limits %}{{ "-" if v["meets_limits"] is none else ("yes" if v["meets_limits"] else "no") }} | {% endif %}{{ v["conversations"] }} |
+{% endfor %}
+
+## The current version's conversations
+
+**Trajectory Folder**: {{ traces_folder }}
+
+{% if digest_file %}**Digest**: `{{ digest_file }}` lists every conversation in the folder in one file: every case with a conversation that did not succeed, how each of those conversations ended and the evaluators' reasons, then the cases where every conversation succeeded. Read it first, then open the conversations it points you to (each file holds its messages once, in `response.messages`).
+
+{% endif %}Each trace's `reward` labels that one conversation, from 0 (worst) to 1 (best): its {{ label_metrics | join(" and ") }}{% if label_ranked %}, ranked among the current version's conversations{% endif %}.{% if judged_by_version %} A conversation's {{ judged_by_version | join(" and ") }} {{ "is" if judged_by_version | length == 1 else "are" }} not in its label: compare the versions for {{ "that" if judged_by_version | length == 1 else "those" }}.{% endif %}
+
+## The parameters ({{ variables | length }})
+{% for v in variables %}
+<parameter name="{{ v.name }}">
+{{ params[v.name] }}
+</parameter>
+
+- **What it is**: {{ v.about or "text the agent reads" }}
+- **Its limit**: {% if v.max_chars %}at most {{ v.max_chars }} characters (it is {{ params[v.name] | length }} now){% else %}none (it is {{ params[v.name] | length }} characters now){% endif %}
+{% endfor %}
+
+---
+
+## Analysis Steps
+
+**Step 1: Learn from the versions**
+
+Read the table above. Compare the texts of higher-ranked versions with lower-ranked ones, and a version with the one it was built from: what do the versions that did well say, or leave out?
+```bash
+ls {{ versions_folder }} | head -40
+diff {{ versions_folder }}/rank-001-version-*.md {{ versions_folder }}/rank-002-version-*.md
+```
+
+**Step 2: Check the traces' sizes**
+```bash
+ls -lh {{ traces_folder }}/*.json | head -20
+```
+
+**Step 3: Categorize the traces by their label**
+{% if digest_file %}```bash
+cat {{ digest_file }}
+```
+{% else %}```bash
+for f in {{ traces_folder }}/*.json; do
+    echo -n "$f: "
+    grep -oE '"reward":\s*[0-9.-]+' "$f" | head -1
+done 2>/dev/null | head -30
+```
+{% endif %}
+**Step 4: Examine sufficient traces**
+
+| Folder Size | Minimum Coverage |
+|-------------|------------------|
+| ≤ 10 traces | Examine ALL |
+| 11-30 traces | At least 70% |
+| > 30 traces | At least 50% |
+
+Balance coverage between the traces that went well and those that did not.
+
+**Step 5: Extract insights**
+
+Focus on:
+- What do the versions that did well have in common, and what did the versions that did badly try?
+- What do the current version's successful conversations do that the failed ones don't, and what mistakes do the failed ones make?
+- What patterns appear across MULTIPLE traces (not one-off issues)?
+
+Do not repeat a change the versions show did badly. Put each insight in the ONE parameter that reaches the agent when it matters: guidance about one item's selection, inputs or results belongs in that item's text; guidance about the whole task belongs in the text that governs the whole task.
+
+**Step 6: Write and submit the new version**
+
+Write each parameter you change in full: you may add, rewrite, reorder, shorten or remove anything. Change only what the evidence gives you a reason to change, and at least one parameter. Write each changed parameter's complete new value to its own file in your working folder:
+```bash
+cat > {{ work_folder }}/optimized_<name>.txt << 'PARAM_EOF'
+[the complete new value]
+PARAM_EOF
+```
+
+Before submitting, check the length of every file whose parameter has a character limit, and shorten it until it fits:
+```bash
+wc -c < {{ work_folder }}/optimized_<name>.txt
+```
+A value over its limit is discarded and the current value kept.
+
+Then submit them under their exact names:
+```
+submit_optimized_params(file_path_dict={"<name>": "{{ work_folder }}/optimized_<name>.txt", ...})
+```
+
+A parameter you do not submit keeps its current value.
+
+---
+
+## Criteria for Good Insights
+
+### Actionability
+Each insight should have:
+- Clear **trigger condition** (WHEN...)
+- Specific **action** (DO...)
+
+Reject vague insights like "be careful" or "consider edge cases".
+
+### Coverage
+- Address different failure modes observed
+- Prioritize patterns that appear in multiple traces
+
+### Appropriate Generalization
+- Keep actions concrete and specific
+- Generalize conditions when pattern applies broadly
+- The agent will meet tasks you have not seen: no rule that holds only for one task's names, ids or values
+
+### A tool's description
+Preserve its correct facts and, where the traces support it, cover: **use when** (the trigger, prerequisites, how it differs from similar items), **inputs** (meanings, formats, constraints) and **returns** (important fields, empty or partial results, side effects, recoverable errors). Keep it local to the tool: no multi-step task workflow, no unsupported guarantees.

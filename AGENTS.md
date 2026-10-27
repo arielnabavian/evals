@@ -195,6 +195,20 @@ strands-evals/
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │
+│   ├── optimization/                         # Optimize a @tunable agent against an Experiment (Study)
+│   │   ├── space/                            # @tunable, domains, components, OneOf, tool_descriptions, SkillLibrary
+│   │   ├── study.py                          # Study, Candidate, Scope
+│   │   ├── schedules.py                      # Joint, Alternate, Nested
+│   │   ├── phases.py                         # PrimaryFirst: reward first, then cost (cost goals' default)
+│   │   ├── search.py                         # Search: blocks, schedule, redraws
+│   │   ├── methods.py                        # Block, Method, TPE/Optuna, Reflection, SkillCuration
+│   │   ├── projection.py                     # metrics, objectives, constraints, estimates, combinations
+│   │   ├── trials.py                         # Trial (one case, one repetition) and TrialStatus
+│   │   ├── record.py                         # the study's record on disk (study.jsonl)
+│   │   ├── cost.py                           # what a study spends, in tokens, by role and phase
+│   │   ├── effects.py                        # effects model fitted to a record (effects.json)
+│   │   └── _reflection/                      # reflection and skill-curation optimizers (private)
+│   │
 │   └── types/                                # Public type definitions
 │       ├── evaluation.py                     # EvaluationData / EvaluationOutput
 │       ├── evaluation_report.py
@@ -222,9 +236,12 @@ strands-evals/
 │   ├── tools/
 │   ├── cli/
 │   │   └── fixtures/                         # local agent / task / evaluator fixtures
+│   ├── optimization/
 │   └── types/
 │
 ├── tests_integ/                              # Integration tests (real providers)
+│
+├── examples/optimization/                    # Optimization examples (quickstart, poem, document reader, τ², AppWorld)
 │
 ├── pyproject.toml
 ├── README.md
@@ -237,6 +254,7 @@ strands-evals/
 
 - **`src/strands_evals/`**: All production code
 - **`src/strands_evals/cli/`**: `strands-evals` console script — six subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
+- **`src/strands_evals/optimization/`**: `Study` optimizes a `@tunable` agent factory against an `Experiment`: candidates (values for the factory's tunable arguments), each run as trials (case × repetition); a search: blocks (a method and the declared variables it proposes) and a schedule for them; the record of every candidate. Its guide is `src/strands_evals/optimization/README.md`. Optional extra: `pip install strands-agents-evals[optimization]`.
 - **`tests/strands_evals/`**: Unit tests mirroring src/ structure
 - **`tests/strands_evals/cli/`**: CLI tests; fixtures live under `cli/fixtures/` and are referenced by tests via `tests.strands_evals.cli.fixtures.*:attr` specs
 - **`tests_integ/`**: Integration tests using real trace providers and model endpoints
