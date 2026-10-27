@@ -983,9 +983,10 @@ class Study:
                 previous=self.fit,
             )
         except Exception as exc:  # noqa: BLE001 - a model that cannot be fitted is recorded, and measured means decide
-            self._model_problem = f"the model could not be fitted ({type(exc).__name__}: {exc})"
-            if self.log:
-                self.log(f"model: {self._model_problem}; deciding with measured means")
+            problem = f"the model could not be fitted ({type(exc).__name__}: {exc})"
+            if self.log and problem != self._model_problem:  # said once, not at every step (BayesBench not installed)
+                self.log(f"model: {problem}; deciding with measured means")
+            self._model_problem = problem
             return
         if fitted is None:
             return

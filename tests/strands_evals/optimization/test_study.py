@@ -120,6 +120,31 @@ def test_longest_poem_within_a_token_budget():
     assert best.agent().model.text.count("word") == 40
 
 
+def test_a_model_that_cannot_be_fitted_is_said_once_and_measured_means_decide(monkeypatch):
+    from strands_evals.optimization import model
+
+    def missing(*args, **kwargs):
+        raise ModuleNotFoundError("No module named 'bayesbench'", name="bayesbench")
+
+    monkeypatch.setattr(model, "fit", missing)
+    lines: list[str] = []
+    study = Study(
+        agent=create_poet,
+        experiment=EXPERIMENT,
+        objectives=Maximize("WordCount"),
+        constraints=[AtMost("output_tokens", 80)],
+        search=grid({"stanzas": [1, 2, 3, 4, 5, 6]}, STANZAS),
+        log=lines.append,
+    )
+    study.optimize(iterations=6)
+    assert [line for line in lines if line.startswith("model:")] == [
+        "model: the model could not be fitted (ModuleNotFoundError: No module named 'bayesbench'); deciding with "
+        "measured means"
+    ]
+    assert not study.by_model
+    assert study.best_candidate.params == {"stanzas": 4}  # as by measured means (the test above)
+
+
 @needs_bayesbench
 def test_by_the_model_a_constraint_must_hold_with_the_required_probability():
     study = Study(
