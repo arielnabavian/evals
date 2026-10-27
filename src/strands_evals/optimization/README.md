@@ -622,7 +622,7 @@ starts no server; τ² runs its environments in process. Model calls go out to B
 ## Known limitations and results so far
 
 Results come from our experiments with Claude Haiku 5.5 as the agent and Sonnet 5.5 as the rewriter, against GEPA and
-RRSI at matched budgets, every number on held-out test cases with 90% intervals.
+RRSI at matched budgets, every number on held-out test cases with 90% intervals unless it says otherwise.
 
 - Most benchmarks saturate. On τ² telecom every max-reward arm reached 98 to 99% (ours from 31-35% to 99%, GEPA and RRSI
   to 98%), and the differences sat below the smallest detectable one (2.2 to 3.0 points). On LOCA-bench no arm gained.
@@ -632,8 +632,10 @@ RRSI at matched budgets, every number on held-out test cases with 90% intervals.
 - Where there was headroom, the framework won. On AppWorld, in a pre-registered comparison against a GEPA whose
   proposals respected the length limit, our full space scored +6.2 points [+4.5, +8.0] higher, at 1.77 times that GEPA's
   weighted tokens. On τ³ banking our prompt space beat GEPA by +9.0 [+3.4, +14.7] and RRSI by +5.9 [+0.4, +11.4], at
-  1.39 and 1.22 times their weighted tokens. On GEPA's own HotpotQA setup it scored about 5.5 points above GEPA re-run
-  from GEPA's code, with a stronger rewriter model than GEPA's.
+  1.39 and 1.22 times their weighted tokens.
+- On GEPA's own HotpotQA setup it scored about 5.5 points above GEPA re-run from GEPA's code, which reflects with a
+  weaker model. Given the same Sonnet 5.5 rewriter, the two were indistinguishable: +1.4 [-1.6, +4.5] and -1.0 [-3.7,
+  +1.7] points over two seeds, with 95% intervals. That lead came from the rewriter model, not the framework.
 - Its claims held. Over 38 studies, the validation estimate it selected by exceeded the fresh test by a median of 0.9
   points; GEPA's own scores exceeded it by 1.8 to 16.9.
 - Its winning harnesses cost more per conversation, and every pre-registered cost-aware comparison failed before the
