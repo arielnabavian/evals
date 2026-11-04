@@ -205,3 +205,35 @@ def test_a_trial_whose_task_raises_trial_invalid_runs_again_then_measures_nothin
     assert by_case["flaky"].status == TrialStatus.COMPLETED
     assert by_case["down"].status == TrialStatus.INFRASTRUCTURE_INVALID
     assert "did not answer" in by_case["down"].error and "WordCount" not in by_case["down"].metrics
+
+
+def test_classify_an_openai_client_error_whose_response_is_not_a_dict():
+    # An OpenAI-compatible server's 400 (here vLLM's, for a conversation with no user message left) is the agent's
+    # failure; classifying it once raised (its response is an httpx.Response) and the trial was lost as never run.
+    httpx = pytest.importorskip("httpx")  # the OpenAI client (strands-agents[openai]) is not a dependency
+    openai = pytest.importorskip("openai")
+
+    request = httpx.Request("POST", "http://localhost:8000/v1/chat/completions")
+    response = httpx.Response(400, request=request, json={"error": {"message": "No user query found in messages."}})
+    refused = openai.BadRequestError("Error code: 400", response=response, body=None)
+    assert classify(refused) == TrialStatus.AGENT_FAILURE
+    assert classify(EventLoopException(refused)) == TrialStatus.AGENT_FAILURE
+
+
+def test_an_agent_that_raises_an_openai_client_error_is_recorded_as_an_agent_failure():
+    httpx = pytest.importorskip("httpx")  # the OpenAI client (strands-agents[openai]) is not a dependency
+    openai = pytest.importorskip("openai")
+
+    request = httpx.Request("POST", "http://localhost:8000/v1/chat/completions")
+    response = httpx.Response(400, request=request, json={"error": {"message": "No user query found in messages."}})
+
+    @tunable()
+    def refused():
+        return Agent(
+            model=Says("hi", fail=openai.BadRequestError("Error code: 400", response=response, body=None)),
+            callback_handler=None,
+        )
+
+    trials = trials_of(refused, experiment(WordCount()))
+    assert [t.status for t in trials] == [TrialStatus.AGENT_FAILURE] * 2
+    assert all("Error code: 400" in t.error for t in trials)

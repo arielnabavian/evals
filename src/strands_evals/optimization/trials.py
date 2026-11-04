@@ -128,7 +128,10 @@ def classify(exc: BaseException) -> TrialStatus:
         return TrialStatus.INFRASTRUCTURE_INVALID
     if isinstance(exc, _infrastructure_errors()):
         return TrialStatus.INFRASTRUCTURE_INVALID
-    code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", "")).lower()
+    # botocore's errors carry their response as a dict; an OpenAI client's error carries an httpx.Response, which
+    # names no service error code here
+    response = getattr(exc, "response", None)
+    code = str(response.get("Error", {}).get("Code", "")).lower() if isinstance(response, Mapping) else ""
     if code in _SERVICE_ERRORS:  # the model service's own failure, in a streamed response (botocore's EventStreamError)
         return TrialStatus.INFRASTRUCTURE_INVALID
     return TrialStatus.AGENT_FAILURE
