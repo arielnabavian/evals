@@ -32,6 +32,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 import warnings
 from abc import ABC, abstractmethod
@@ -644,10 +645,37 @@ def _meets(aim: Any, study: "Study", c: "Candidate", views: dict[int, Any]) -> b
     return None if not aim.limits(study.projection) else c.feasible
 
 
+VERSION_FILE = "version.md"  # a version's results and other values, in its folder; its texts are files beside it
+# A version's header, as ``_write_versions`` writes it: a line ``# Version N`` and the line below it.
+_VERSION_HEADER = re.compile(r"^# Version \d+(?: \(the baseline\))?[ \t]*\r?\n(?:rank|built from): ", re.M)
+
+
+def _text_files(names: Sequence[str]) -> dict[str, str]:
+    """Each text's file name in a version's folder: its name, with anything but letters, digits, ``.``, ``_`` and
+    ``-`` made ``_``, then ``.txt`` (numbered when two names would share one)."""
+    out: dict[str, str] = {}
+    for name in names:
+        stem = re.sub(r"[^A-Za-z0-9._-]", "_", name).lstrip(".") or "text"
+        file, i = f"{stem}.txt", 2
+        while file in out.values() or file == VERSION_FILE:
+            file, i = f"{stem}-{i}.txt", i + 1
+        out[name] = file
+    return out
+
+
 def _write_versions(folder: str, versions: list[dict[str, Any]], goal_metrics: list[str]) -> None:
-    """One file per version, named by its rank: its results, its other values, then each of its texts in full."""
+    """One folder per version, named by its rank (``rank-001-version-26``): ``version.md`` holds its results and its
+    other values, and each of its texts is a file of its own (``_text_files``) that holds the text and nothing else.
+
+    A rewriter that wants to start from a version's text copies that text's file, so what it edits and submits is
+    the text alone. With one file per version, its header and results above its texts, a rewriter that copied the
+    file into its working folder to edit the text below them submitted the header too, and the header became part of
+    the text it measured. A submission that still carries the header is refused (``_no_version_header``)."""
     for v in versions:
         rank = f"rank-{v['rank']:03d}" if v["rank"] is not None else "unranked"
+        path = os.path.join(folder, f"{rank}-version-{v['number']}")
+        os.makedirs(path)
+        files = _text_files(list(v["texts"]))
         lines = [f"# Version {v['number']}" + (" (the baseline)" if v["baseline"] else "")]
         lines.append(f"rank: {v['rank'] if v['rank'] is not None else 'not ranked (a result is missing)'}")
         lines.append(f"built from: version {v['from']}" if v["from"] is not None else "built from: nothing (the start)")
@@ -657,10 +685,28 @@ def _write_versions(folder: str, versions: list[dict[str, Any]], goal_metrics: l
         lines.append(f"conversations: {v['conversations']}")
         if v["others"]:
             lines += ["", "## Other values", json.dumps(v["others"], indent=1, default=str)]
+        lines += ["", "## Its texts, each in its own file in this folder (the text alone)"]
         for k, text in v["texts"].items():
-            lines += ["", f"## {k}", "", str(text)]
-        with open(os.path.join(folder, f"{rank}-version-{v['number']}.md"), "w") as f:
+            value = "" if text is None else str(text)
+            lines.append(f"- {k}: `{files[k]}` ({len(value):,} characters)")
+            with open(os.path.join(path, files[k]), "w") as f:
+                f.write(value)
+        with open(os.path.join(path, VERSION_FILE), "w") as f:
             f.write("\n".join(lines) + "\n")
+
+
+def _no_version_header(name: str, text: str) -> str | None:
+    """Why a submitted text is refused, or None: it carries a version's header from the versions folder
+    (``_write_versions``), which is the record of a version and never part of a text."""
+    found = _VERSION_HEADER.search(text)
+    if found is None:
+        return None
+    first = found.group(0).splitlines()[0].strip()
+    return (
+        f"it holds a version's header from the versions folder (`{first}` and the results below it), which is not "
+        f"part of the text. Write the text alone to the file (a version's text is alone in its `.txt` file, never "
+        f"in {VERSION_FILE}) and submit it again"
+    )
 
 
 def _feed(optimizer: Any, rewards: list, study: "Study") -> None:
@@ -692,8 +738,9 @@ class Reflection(Method):
     writes a new version of the texts from two kinds of evidence:
 
     - the versions: every candidate measured so far, ranked best first for the study's goal, each with its texts and
-      its goal metrics' means over all its trials (the table in its task message; the texts in full, one file per
-      version): what kinds of text have done well. A metric with no range, such as tokens, is judged here only;
+      its goal metrics' means over all its trials (the table in its task message; one folder per version, each text
+      in full in a file of its own: ``_write_versions``): what kinds of text have done well. A metric with no range,
+      such as tokens, is judged here only;
     - the held candidate's trials: their messages, the evaluators' reasons, and each trial's reward from the goal's
       bounded metrics (task success: see ``Projection.rewards``), contrasting those that went well with those that
       did not: where its agent goes wrong.
@@ -701,7 +748,9 @@ class Reflection(Method):
     It writes each text it changes in full, and may add, rewrite, reorder or remove anything. Each variable says what
     it is (``TextValue(about=...)``) and its limit (``max_chars``); a value over its limit is sent back to be shortened,
     in the same conversation, up to ``over_limit_retries`` times (2; 0 is round 3's), and one still over is dropped and
-    the held one kept. Options go to the optimizer (``model_config``, ``n_sample_traces``, templates, ...).
+    the held one kept. A submission whose text carries a version's header is refused (``_no_version_header``) and the
+    agent told why; a turn that ends on such a refusal is sent back the same way. Options go to the optimizer
+    (``model_config``, ``n_sample_traces``, templates, ...).
 
     The optimizer gives its model a shell over the traces: run studies with text blocks where model-written shell
     commands are acceptable (a VM or a container), with ``BYPASS_TOOL_CONSENT=true``."""
@@ -749,6 +798,7 @@ class Reflection(Method):
             "task_message_template": _TaskMessage(template, variables, evidence),
             "limits": {v["name"]: v["max_chars"] for v in variables if v.get("max_chars") is not None},
             "over_limit_retries": self.over_limit_retries,
+            "check": _no_version_header,  # a text with a version's header is refused at submission
         }
         return ContrastiveReflection(values, **options)
 
@@ -798,6 +848,7 @@ class Reflection(Method):
             try:
                 optimizer.step()
             except Exception as exc:  # noqa: BLE001 - a failed reflection keeps the held text; the study goes on
+                rejected = getattr(optimizer, "rejected", None)
                 return _TextDraw(
                     held,
                     {
@@ -806,6 +857,7 @@ class Reflection(Method):
                         "error": f"{type(exc).__name__}: {exc}"[:2000],
                         "usage": usage(getattr(optimizer, "last_metrics", None)),  # what it spent before it failed
                         "seconds": getattr(optimizer, "last_wall_clock_s", None),
+                        **({"rejected": rejected[:10]} if rejected else {}),
                     },
                 )
         values, dropped = dict(text.values), {}
@@ -829,6 +881,9 @@ class Reflection(Method):
             origin["revised"] = revised
         if dropped:
             origin["dropped"] = dropped
+        rejected = getattr(optimizer, "rejected", None)
+        if rejected:  # submissions refused for a version's header in a text: which text, and why
+            origin["rejected"] = rejected[:10]
         refused = getattr(optimizer, "refused", None)
         if refused:  # commands that named paths outside its folders (see the optimizer's confined shell)
             origin["refused"] = refused[:10]

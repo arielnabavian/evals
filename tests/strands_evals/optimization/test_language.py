@@ -2,11 +2,14 @@
 
 import json
 import os
+import re
+import shlex
 import shutil
 from pathlib import Path
 
 import pytest
 from strands import Agent, tool
+from strands.models.model import Model
 
 from strands_evals.optimization import (
     Block,
@@ -20,7 +23,8 @@ from strands_evals.optimization import (
     tool_descriptions,
     tunable,
 )
-from strands_evals.optimization.methods import SkillCuration
+from strands_evals.optimization._reflection import agentic
+from strands_evals.optimization.methods import SkillCuration, _no_version_header, _write_versions
 from strands_evals.optimization.space.skills import check_library, resolve, store
 
 from .helpers import Says, experiment
@@ -77,8 +81,8 @@ class Scripted:
         pass
 
     def step(self):
-        folder = self.evidence["versions_folder"]
-        files = {name: (Path(folder) / name).read_text() for name in sorted(os.listdir(folder))}
+        folder = Path(self.evidence["versions_folder"])
+        files = {str(p.relative_to(folder)): p.read_text() for p in sorted(folder.rglob("*")) if p.is_file()}
         Scripted.seen.append({"variables": self.variables, "evidence": self.evidence, "files": files})
         self.values.update_params(self.edits.pop(0) if isinstance(self.edits, list) else self.edits)
 
@@ -209,9 +213,172 @@ def test_reflection_is_given_every_version_ranked_for_the_goal():
     assert versions[0]["current"] and versions[0]["from"] == 0 and versions[0]["changed"] == ["system_prompt"]
     assert sorted(v["number"] for v in versions) == [0, 1, 2] and [v["rank"] for v in versions] == [1, 2, 3]
     assert last["evidence"]["goal_metrics"] == ["WordCount"] and last["evidence"]["label_ranked"]
-    assert "rank-001-version-1.md" in last["files"]
-    assert "## system_prompt\n\none two three" in last["files"]["rank-001-version-1.md"]
+    assert last["files"]["rank-001-version-1/system_prompt.txt"] == "one two three"  # the text alone
+    record = last["files"]["rank-001-version-1/version.md"]
+    assert record.startswith("# Version 1\nrank: 1\nbuilt from: version 0\n") and "one two three" not in record
+    assert "- system_prompt: `system_prompt.txt` (13 characters)" in record
+    assert [t for f, t in last["files"].items() if f.endswith("-version-0/system_prompt.txt")] == ["Help."]
     assert study.candidates[3].origin["text"]["versions"] == 3
+
+
+# ---- the rewriter's own files never reach a text ---------------------------------------------------------------------
+HEADER = re.compile(r"^# Version \d+", re.M)  # the first line of a version's header in the versions folder
+
+
+class Rewriter(Model):
+    """A scripted reflection model: each call takes the next step of ``script`` and makes it a tool call (``shell``
+    with a command, ``submit`` with files) or a reply that ends its turn (``say``). A step may be a function of what
+    the model has read so far (``read``: the versions folder, the current text, what it was last told: a tool's
+    result or a message sent back to it). ``told`` keeps everything it was told after the task message."""
+
+    def __init__(self, script):
+        self.script, self.told = list(script), []
+        self.config = {"model_id": "rewriter"}
+
+    def update_config(self, **kw):
+        self.config.update(kw)
+
+    def get_config(self):
+        return self.config
+
+    async def structured_output(self, output_model, prompt, system_prompt=None, **kwargs):
+        yield {"output": None}
+
+    @staticmethod
+    def read(messages):
+        task = messages[0]["content"][0]["text"]
+        last = [
+            c["toolResult"]["content"][0].get("text", "") if "toolResult" in c else c.get("text", "")
+            for c in (messages[-1].get("content", []) if len(messages) > 1 else [])
+            if isinstance(c, dict)
+        ]
+        return {
+            "versions": re.search(r"`(/[^`]*versions_[^`/]*)`", task).group(1),
+            "text": re.search(r'<parameter name="system_prompt">\n(.*?)\n</parameter>', task, re.S).group(1),
+            "last": "\n".join(last),
+        }
+
+    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs):
+        seen = self.read(messages)
+        if seen["last"]:
+            self.told.append(seen["last"])
+        kind, arg = self.script.pop(0) if self.script else ("say", "Nothing more.")
+        arg = arg(seen) if callable(arg) else arg
+        yield {"messageStart": {"role": "assistant"}}
+        if kind == "say":
+            yield {"contentBlockDelta": {"delta": {"text": arg}}}
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
+        else:
+            name, args = ("shell", {"command": arg}) if kind == "shell" else ("submit_optimized_params", arg)
+            yield {"contentBlockStart": {"start": {"toolUse": {"toolUseId": f"t{len(self.script)}", "name": name}}}}
+            yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps({**args})}}}}
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "tool_use"}}
+        usage = {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15}
+        yield {"metadata": {"usage": usage, "metrics": {"latencyMs": 1}}}
+
+
+SUBMIT = ("submit", {"file_path_dict": {"system_prompt": "optimized_system_prompt.txt"}})
+
+
+def rewrite_once(monkeypatch, script, record=None, **options):
+    """One reflection step on ``echo`` ("Help.") with the real optimizer, confined shell and submit tool, and
+    ``Rewriter(script)`` as its model; returns the study and the model."""
+    model = Rewriter(script)
+    monkeypatch.setattr(agentic, "BedrockModel", lambda **kwargs: model)
+    study = Study(
+        agent=echo,
+        experiment=experiment(),
+        objectives=Maximize("WordCount"),
+        search=Search(width=1, blocks=[Block(Reflection(**options), HELP)]),
+        record=record,
+        log=None,
+    )
+    study.optimize(iterations=1)
+    return study, model
+
+
+def test_a_rewriter_that_copies_the_current_texts_file_from_the_versions_folder_submits_the_text_alone(monkeypatch):
+    """With one file per version, a rewriter that copied the versions folder's file holding the current text into
+    its working folder, edited the text there and submitted it submitted the version's whole record, so its header
+    (`# Version 26`, rank, results) became part of the text."""
+    copy_and_edit = (
+        "shell",
+        lambda seen: (
+            f"f=$(grep -rlxF -- {shlex.quote(seen['text'])} {seen['versions']} | sort | head -1); "
+            "sed 's/^Help\\.$/Help. Be brief./' \"$f\" > optimized_system_prompt.txt"
+        ),
+    )
+    study, _ = rewrite_once(monkeypatch, [copy_and_edit, SUBMIT, ("say", "Submitted.")])
+    candidate = study.candidates[1]
+    assert candidate.origin["text"]["status"] == "rewritten"
+    assert not HEADER.search(candidate.params["system_prompt"]), candidate.params["system_prompt"]
+    assert candidate.params["system_prompt"] == "Help. Be brief."
+
+
+# what a rewriter that pasted a version's whole record writes: its header and results above the text
+PASTED = (
+    "printf '# Version 0 (the baseline)\\nrank: 1\\nbuilt from: nothing (the start)\\nWordCount: 1\\n\\n"
+    "Help. Be brief.\\n' > optimized_system_prompt.txt"
+)
+ALONE = ("shell", "printf 'Help. Be brief.\\n' > optimized_system_prompt.txt")
+
+
+def test_a_submission_whose_text_carries_a_versions_header_is_refused_and_the_rewriter_told_why(monkeypatch):
+    script = [("shell", PASTED), SUBMIT, ALONE, SUBMIT, ("say", "Submitted.")]
+    study, model = rewrite_once(monkeypatch, script)
+    candidate = study.candidates[1]
+    assert candidate.params["system_prompt"] == "Help. Be brief."
+    refusal = next(t for t in model.told if t.startswith("Refused"))
+    assert "system_prompt: it holds a version's header from the versions folder (`# Version 0 (the baseline)`" in (
+        refusal
+    )
+    assert "Parameters submitted successfully" in model.told[-1]
+    [rejected] = candidate.origin["text"]["rejected"]
+    assert rejected["name"] == "system_prompt" and "version's header" in rejected["reason"]
+
+
+def test_a_turn_that_ends_on_a_refusal_is_sent_back_and_one_never_fixed_keeps_the_held_text(monkeypatch, tmp_path):
+    script = [("shell", PASTED), SUBMIT, ("say", "Done."), ALONE, SUBMIT, ("say", "Submitted.")]
+    study, model = rewrite_once(monkeypatch, script)  # over_limit_retries=2: sent back once
+    assert study.candidates[1].params["system_prompt"] == "Help. Be brief."
+    assert any("Your turn ended with nothing submitted" in t and "Refused" in t for t in model.told)
+
+    script = [("shell", PASTED), SUBMIT, ("say", "Done.")]
+    study, model = rewrite_once(monkeypatch, script, record=tmp_path, over_limit_retries=0)
+    assert not any(HEADER.search(c.params["system_prompt"]) for c in study.candidates)
+    events = [json.loads(line) for line in (tmp_path / "study.jsonl").read_text().splitlines()]
+    # nothing accepted: the draw kept the held text (the baseline's, so a repeat), never the header
+    origin = next(e for e in events if e["type"] in ("candidate", "repeat") and e.get("origin"))["origin"]["text"]
+    assert origin["status"] == "failed" and "Every submission was refused (1)" in origin["error"]
+    assert origin["rejected"][0]["name"] == "system_prompt"
+
+
+def test_each_version_is_a_folder_of_its_texts_alone_and_its_record_is_never_a_text(tmp_path):
+    version = {
+        "rank": 1,
+        "number": 26,
+        "from": 15,
+        "baseline": False,
+        "cells": ["0.424", "465,938"],
+        "meets_limits": True,
+        "conversations": 144,
+        "others": {"effort": "high"},
+        "texts": {"contract": "You are an agent.\n## Acting\n- act", "tools/kb search": "Search the KB."},
+    }
+    _write_versions(str(tmp_path), [version], ["reward", "weighted_tokens"])
+    folder = tmp_path / "rank-001-version-26"
+    assert sorted(p.name for p in folder.iterdir()) == ["contract.txt", "tools_kb_search.txt", "version.md"]
+    assert (folder / "contract.txt").read_text() == "You are an agent.\n## Acting\n- act"
+    record = (folder / "version.md").read_text()
+    assert record.startswith("# Version 26\nrank: 1\nbuilt from: version 15\nreward: 0.424\n")
+    assert "You are an agent." not in record and '"effort": "high"' in record
+    assert _no_version_header("contract", (folder / "contract.txt").read_text()) is None
+    assert "`# Version 26`" in _no_version_header("contract", record + "\nYou are an agent.")
+    pasted = "# Version 26\nrank: 1\nbuilt from: version 15\nreward: 0.424\n\n## contract\n\nYou are an agent."
+    assert _no_version_header("contract", pasted) and _no_version_header("contract", "Intro.\n\n" + pasted)
+    assert _no_version_header("contract", "# Version 2 of the API\nrank: by date\n# Versions\n") is None
 
 
 # ---- skill libraries ------------------------------------------------------------------------------------------------

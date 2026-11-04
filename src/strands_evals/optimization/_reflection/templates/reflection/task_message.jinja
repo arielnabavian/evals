@@ -2,7 +2,7 @@ Write a new version of the parameters below, so that the agent does better on th
 
 ## The versions measured so far
 
-{{ versions | length }} versions, best first for this study's goal{% if limits %} (its limits: {{ limits | join("; ") }}){% endif %}. Each version's results are its means over all of its conversations. The current version (marked ←) is the one whose conversations are in the trajectory folder. Each version's parameters, in full, are in `{{ versions_folder }}`: one file per version, named by its rank.
+{{ versions | length }} versions, best first for this study's goal{% if limits %} (its limits: {{ limits | join("; ") }}){% endif %}. Each version's results are its means over all of its conversations. The current version (marked ←) is the one whose conversations are in the trajectory folder. Each version's parameters, in full, are in `{{ versions_folder }}`: one folder per version, named by its rank, with its results in `version.md` and each parameter alone in a file of its own (`<name>.txt`, listed in `version.md`).
 
 | Rank | Version | Built from | Changed | {% for m in goal_metrics %}{{ m }} | {% endfor %}{% if limits %}Meets the limits | {% endif %}Conversations |
 |---|---|---|---|{% for m in goal_metrics %}---|{% endfor %}{% if limits %}---|{% endif %}---|
@@ -36,7 +36,7 @@ Write a new version of the parameters below, so that the agent does better on th
 Read the table above. Compare the texts of higher-ranked versions with lower-ranked ones, and a version with the one it was built from: what do the versions that did well say, or leave out?
 ```bash
 ls {{ versions_folder }} | head -40
-diff {{ versions_folder }}/rank-001-version-*.md {{ versions_folder }}/rank-002-version-*.md
+diff -r {{ versions_folder }}/rank-001-version-* {{ versions_folder }}/rank-002-version-*
 ```
 
 **Step 2: Check the traces' sizes**
@@ -76,7 +76,7 @@ Do not repeat a change the versions show did badly. Put each insight in the ONE 
 
 **Step 6: Write and submit the new version**
 
-Write each parameter you change in full: you may add, rewrite, reorder, shorten or remove anything. Change only what the evidence gives you a reason to change, and at least one parameter. Write each changed parameter's complete new value to its own file in your working folder:
+Write each parameter you change in full: you may add, rewrite, reorder, shorten or remove anything. Change only what the evidence gives you a reason to change, and at least one parameter. Write each changed parameter's complete new value, and nothing else, to its own file in your working folder (to start from a version's text, copy its `<name>.txt`; a value that carries a version's header from `version.md` is refused):
 ```bash
 cat > {{ work_folder }}/optimized_<name>.txt << 'PARAM_EOF'
 [the complete new value]

@@ -171,6 +171,8 @@ class TestTemplates:
             judged_by_version=["tokens"],
         )
         assert "/tmp/traces" in text and "`/tmp/versions`" in text
+        assert "results in `version.md` and each parameter alone in a file of its own (`<name>.txt`" in text
+        assert "diff -r /tmp/versions/rank-001-version-* /tmp/versions/rank-002-version-*" in text
         assert '<parameter name="system_prompt">\nBe brief.' in text
         assert "the system prompt" in text and "at most 200 characters" in text
         assert "| 1 | 4 ← | 2 | system_prompt | 0.62 | 61,234 | yes | 171 |" in text
@@ -419,6 +421,18 @@ class TestAgenticOptimizer:
         assert "submitted successfully" in submit(file_path_dict={"system_prompt": str(path)})
         assert opt._get_submitted_params() == {"system_prompt": "new prompt"}
         assert opt._get_submitted_params() is None  # read once, then reset
+
+    def test_submit_tool_refuses_what_its_check_refuses_and_says_why(self):
+        opt = PickBest(TextValues(system_prompt="x"), check=lambda k, v: "it is shouting" if v.isupper() else None)
+        submit = opt._create_agent("persona").tool_registry.registry["submit_optimized_params"]
+        write_file(os.path.join(opt._work_folder(), "p.txt"), "LOUD")
+        result = submit(file_path_dict={"system_prompt": "p.txt"})
+        assert result == "Refused, nothing was submitted:\nsystem_prompt: it is shouting"
+        assert opt._get_submitted_params() is None and opt._refusal == result
+        assert opt.rejected == [{"name": "system_prompt", "reason": "it is shouting"}]
+        write_file(os.path.join(opt._work_folder(), "p.txt"), "quiet")
+        assert "submitted successfully" in submit(file_path_dict={"system_prompt": "p.txt"})
+        assert opt._get_submitted_params() == {"system_prompt": "quiet"} and opt._refusal is None
 
     def test_guardrail_truncates_long_tool_output(self):
         event = SimpleNamespace(result={"content": [{"text": "x" * 50}, {"text": "short"}]})

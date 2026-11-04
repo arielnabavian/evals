@@ -28,7 +28,7 @@ import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Optional, Protocol
 
 # For strands_tools' shell (skill curation's agent uses it): without it shell initializes in interactive-consent mode
@@ -305,6 +305,7 @@ class AgenticOptimizer(ABC):
         digest: bool = True,
         digest_chars: int = DIGEST_CHARS,
         digest_costs: Sequence[str] = (),
+        check: Callable[[str, str], str | None] | None = None,
     ):
         """
         Initialize the base agentic optimizer.
@@ -340,6 +341,10 @@ class AgenticOptimizer(ABC):
                 are cut to fit; every case that did not succeed is listed).
             digest_costs: Cost metrics the digest gives for every case, those
                 that succeeded too (``digest_text``): a phase that lowers cost.
+            check: Each submitted value's check: given its name and its text,
+                why it cannot be accepted, or None. A submission with a value
+                it refuses is not taken: the submit tool tells the agent why,
+                in its conversation, and the refusal is kept in ``rejected``.
         """
         self.values = values
         self._rollouts: list[Rollout] = []
@@ -359,6 +364,9 @@ class AgenticOptimizer(ABC):
         self.digest_text: Optional[str] = None  # its text, kept after the traces folder is removed
         self._work_dir: Optional[str] = None
         self.refused: list[dict] = []  # the commands the confined shell refused, and the paths they named
+        self.check = check
+        self.rejected: list[dict] = []  # the submitted values ``check`` refused: their names and why
+        self._refusal: Optional[str] = None  # what the agent was told when its last submission was refused
 
         self._temp_dir: Optional[str] = None
         self._submitted_params: Optional[dict] = None
@@ -454,6 +462,17 @@ class AgenticOptimizer(ABC):
             if errors:
                 return "Errors:\n" + "\n".join(errors)
 
+            refusals = []
+            for key, value in params.items():
+                reason = optimizer_ref.check(key, value) if optimizer_ref.check is not None else None
+                if reason:
+                    refusals.append(f"{key}: {reason}")
+                    optimizer_ref.rejected.append({"name": key, "reason": reason[:300]})
+            if refusals:
+                optimizer_ref._refusal = "Refused, nothing was submitted:\n" + "\n".join(refusals)
+                return optimizer_ref._refusal
+
+            optimizer_ref._refusal = None
             optimizer_ref._submitted_params = params
             summary = ", ".join(f"{k} ({len(v)} chars)" for k, v in params.items())
             return f"Parameters submitted successfully: {summary}"

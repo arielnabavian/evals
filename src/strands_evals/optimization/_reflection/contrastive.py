@@ -31,6 +31,14 @@ OVER_LIMIT = (
 )
 
 
+# What the agent is told when its turn ended with nothing accepted and its last submission refused (``check``): in
+# the same conversation, as a value over its limit is.
+REFUSED = (
+    "{refusal}\n\nYour turn ended with nothing submitted. Fix the file(s) in your working folder and submit again with "
+    "submit_optimized_params."
+)
+
+
 def over_limit_message(over: dict[str, tuple[int, int]]) -> str:
     """The message for values over their limits: ``over`` maps a name to (its length, its limit)."""
     details = "; ".join(
@@ -92,7 +100,10 @@ class ContrastiveReflection(AgenticOptimizer):
             over_limit_retries: How many times a submission with a value over its
                 limit is sent back, in the same conversation, to be shortened
                 (``OVER_LIMIT``); what is still over is the caller's to drop.
-                ``revisions`` lists each time: the lengths that were over.
+                ``revisions`` lists each time: the lengths that were over. A
+                turn that ended on a submission ``check`` refused, with nothing
+                accepted, is sent back the same way (``REFUSED``), within the
+                same number of times.
             **kwargs: Additional arguments passed to AgenticOptimizer
                 (model_config, region_name, boto_config, n_sample_traces,
                 stratified_sampling, success_threshold, max_output_chars,
@@ -136,12 +147,13 @@ class ContrastiveReflection(AgenticOptimizer):
             # Sample traces and write to temp folder
             indices = self._sample_traces()
             traces_folder = self._write_traces_to_temp(indices)
+            self._refusal, refused_before = None, len(self.rejected)
 
             # Run reflection
             params = self.values.get_tunable_params()
             agent = self._run_reflection(traces_folder, params)
 
-            # Read submitted params; a value over its limit is sent back to be shortened
+            # Read submitted params; a value over its limit (or a refused submission) is sent back
             optimized_params = self._get_submitted_params()
             optimized_params = self._shorten(agent, optimized_params)
 
@@ -151,6 +163,12 @@ class ContrastiveReflection(AgenticOptimizer):
                 self._step_count += 1
                 summary = ", ".join(f"{k} ({len(str(v))} chars)" for k, v in optimized_params.items())
                 logger.info(f"Step {self._step_count}: updated params: {summary}")
+            elif len(self.rejected) > refused_before:
+                last = self.rejected[-1]
+                raise RuntimeError(
+                    f"Every submission was refused ({len(self.rejected) - refused_before}); the last, "
+                    f"{last['name']}: {last['reason']}"
+                )
             else:
                 raise RuntimeError(
                     "Optimization agent did not call submit_optimized_params tool. "
@@ -174,16 +192,23 @@ class ContrastiveReflection(AgenticOptimizer):
 
     def _shorten(self, agent: Any, params: dict | None) -> dict | None:
         """Send a submission with values over their limits back to the agent, in its conversation, up to
-        ``over_limit_retries`` times; each new submission replaces the values it gives. What it spent is added to
-        ``last_metrics`` and ``last_wall_clock_s``."""
+        ``over_limit_retries`` times, and likewise a turn that ended with nothing accepted on a refused submission
+        (``check``); each new submission replaces the values it gives. What it spent is added to ``last_metrics``
+        and ``last_wall_clock_s``."""
         self.revisions = []
         seconds, metrics = self.last_wall_clock_s, dict(self.last_metrics)
-        while params and agent is not None and len(self.revisions) < self.over_limit_retries:
+        sent = 0
+        while agent is not None and sent < self.over_limit_retries:
             over = self._over(params)
-            if not over:
+            if params and over:
+                self.revisions.append({k: n for k, (n, _) in over.items()})
+                message = over_limit_message(over)
+            elif not params and self._refusal:
+                message = REFUSED.format(refusal=self._refusal)
+            else:
                 break
-            self.revisions.append({k: n for k, (n, _) in over.items()})
-            response = self._invoke_agent(agent, over_limit_message(over))
+            sent, self._refusal = sent + 1, None
+            response = self._invoke_agent(agent, message)
             seconds += self.last_wall_clock_s
             if getattr(response, "metrics", None) is not getattr(agent, "event_loop_metrics", None):
                 metrics = _added(metrics, self.last_metrics)  # this call's alone: add it to the first's
@@ -191,7 +216,7 @@ class ContrastiveReflection(AgenticOptimizer):
                 metrics = dict(self.last_metrics)  # the agent's own metrics: every call so far
             again = self._get_submitted_params()
             if again:
-                params = {**params, **again}
+                params = {**(params or {}), **again}
         self.last_wall_clock_s, self.last_metrics = seconds, metrics
         return params
 
