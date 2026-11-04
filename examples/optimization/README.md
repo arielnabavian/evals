@@ -28,4 +28,6 @@ shell commands are acceptable, such as a VM or a container. Studies with a `Prog
 model-written code in the study's process, under restrictions that are not a sandbox: run them there too.
 
 The ALFWorld example's model server is yours to start. Bind it to 127.0.0.1 (vLLM listens on every interface unless
-given `--host`), and reach a server on another machine through an SSH tunnel rather than a published port.
+given `--host`), and reach a server on another machine through an SSH tunnel rather than a published port; the
+guide's [ALFWorld section](../../src/strands_evals/optimization/README.md#alfworld-on-an-openai-compatible-endpoint)
+has the commands.

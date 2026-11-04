@@ -26,7 +26,8 @@ Status: a research preview on the `feat/harness-optimization` branch. The API ca
 An agent is a model inside a harness: the code that builds the model's context, runs its tools, manages its context
 window and decides when to call it again. With the model fixed, the harness is what you can change. That means the
 system prompt and the harness's own instructions, each tool's description, the thinking effort, which context manager
-runs and at what thresholds, and which plugins are on.
+runs and at what thresholds, which plugins are on, and code the harness runs, such as a context manager or a tool
+written as a class.
 
 Tuning these by hand runs into two problems. The settings have different types and depend on each other: a prompt is
 text, an effort level is a category, a truncation threshold is a number, and a summarizing manager's ratio exists only
@@ -38,9 +39,9 @@ before the framework selected on held-out cases, the search cases overstated the
 Optimizers built around one score, such as GEPA for prompts, propose one kind of variable, keep the best measured
 candidate, and often score it on the cases they searched. This framework differs in four ways:
 
-1. Each kind of variable gets a method that can propose it (TPE for numbers and categories, an LLM rewriter for text),
-   and structural choices are searched in rounds, so a context manager is compared at its tuned best rather than at its
-   defaults.
+1. Each kind of variable gets a method that can propose it (TPE for numbers and categories, an LLM rewriter for text,
+   an agent that writes code for a program), and structural choices are searched in rounds, so a context manager is
+   compared at its tuned best rather than at its defaults.
 2. Decisions use a Bayesian model of every goal metric. A candidate that measured lucky is shrunk toward what its
    settings predict, and a limit counts as met only when the model gives it a probability of at least 0.9.
 3. The cases that search, select and test are kept apart. The test is a paired difference from the baseline over cases
@@ -75,7 +76,7 @@ model: the model could not be fitted (ModuleNotFoundError: No module named 'baye
 
 The record's `selected` event then says `"by": "measured"`, a study without a split does not measure its finalists again
 before selecting, no `effects.json` is written (the run ends with `effects: not written (ModuleNotFoundError: ...)`),
-and the 20 unit tests that need the model skip. The rest of this guide shows output with BayesBench installed; without
+and the 21 unit tests that need the model skip. The rest of this guide shows output with BayesBench installed; without
 it the decided values are the measured ones.
 
 To run the tests (the suite is offline):
@@ -84,6 +85,9 @@ To run the tests (the suite is offline):
 pip install pytest pytest-asyncio
 python -m pytest tests/strands_evals/optimization -q
 ```
+
+The ALFWorld example's tests skip without the `openai` client (`strands-agents[openai]`), and two of them without
+ALFWorld's data; the τ² and AppWorld examples' tests skip without their benchmarks.
 
 ## Quickstart
 
@@ -246,9 +250,69 @@ every trial gets a fresh agent. A candidate's values are flat dotted keys, such 
 | `OneOf(component(A, ...), component(B, ...), labels=[...], default=0)` | a structural choice between components, each with its own variables; only the chosen option's variables exist | `TPE(n_startup_trials=2)`, in rounds |
 | `tool_descriptions(*tools, max_chars=800)` | one `TextValue` per tool, starting from its own description; the factory gets copies with the candidate's descriptions | `Reflection()` |
 | `SkillLibrary(default=None)` | a directory of Agent Skills, each version stored by content in the study's artifact store | `SkillCuration()` |
+| `Program(interface, seeds=[...], about=None, imports=(), context=None, check=None)` | code: a class implementing `interface`, whose versions an agent writes, each stored by content hash in the study's artifact store; the factory receives an instance (None for the empty program, `EMPTY`) | `ProgramProposer()` |
 
 `component(constructor, **arguments)` builds a fresh object for each trial from fixed values and declared variables.
 `Switch(branches, default)` is a structural choice whose branches are mappings of parameters rather than components.
+
+### Program-valued variables
+
+A `Program` is a variable whose values are code: a class implementing an interface you give, written by an agent. It is
+a component, so it goes wherever one does, alone or as an option of a `OneOf` beside hand-written components:
+
+```python
+from strands import Agent
+from strands.agent.conversation_manager import ConversationManager, SlidingWindowConversationManager
+
+from strands_evals.optimization import Int, OneOf, Program, component, tunable
+
+SEED = """
+class KeepLast(ConversationManager):
+    def __init__(self):
+        super().__init__()
+        self.keep = 8
+
+    def apply_management(self, agent, **kwargs):
+        excess = len(agent.messages) - self.keep
+        if excess > 0:
+            del agent.messages[:excess]
+            self.removed_message_count += excess
+
+    def reduce_context(self, agent, e=None, **kwargs):
+        self.keep = max(2, self.keep // 2)
+        self.apply_management(agent)
+"""
+
+manager = Program(ConversationManager, seeds=[SEED], about="how the agent trims its conversation history")
+window = component(SlidingWindowConversationManager, window_size=Int(4, 40, default=20))
+
+
+@tunable(conversation_manager=OneOf(window, manager))
+def create_agent(conversation_manager):
+    return Agent(conversation_manager=conversation_manager, callback_handler=None)
+```
+
+The factory receives a fresh instance of the version's class in each trial. The program's variable is `<key>.version`
+(here `conversation_manager.program.version`), and its value is `programs/<hash>`, the content hash of the version's
+source; the study stores each version once in its artifact store. `seeds` are the starting sources, the first of them
+the default. `EMPTY` is the empty program, for which the factory receives None, so a baseline can run without one. The
+interface is in each version's namespace under its own name, so a version subclasses it without importing it.
+
+A version is loaded under restrictions: only the modules in `imports` (and, unless `standard=False`, a few of the
+standard library, the interface's own package and `strands.types`), each seen through its public names only; no files,
+processes, `exec`, `getattr` or double-underscore attributes; no bare `except`; a small set of builtins; and a budget of
+executed lines and seconds to load it. It must define one concrete subclass of the interface that can be constructed
+with no arguments, and pass `check`, your own test of the loaded class. A version that fails any of this makes its
+candidate invalid: it is never measured, so it never scores a zero. These restrictions are not a sandbox. The code runs
+in the study's process, so run studies with programs where model-written code is acceptable, such as a VM or a
+container, as for text studies. `run_bounded(call, lines=..., seconds=...)` gives a call into a loaded program a budget
+of its own; the ALFWorld macro's tool runs each call that way.
+
+`ProgramProposer` writes the versions (see the methods below). `context` tells it the environment the program runs in,
+`transcript` how to read a trial (the default is the trial's messages), and `settings` are the declaration's own
+settings, plain JSON, kept with its interface in the record's space row. `examples/optimization/programs_live.py` makes
+one proposal on Bedrock and loads it; `examples/optimization/alfworld_programs.py` is a whole declaration, with its
+interface, check, context and transcript.
 
 ### Blocks and methods
 
@@ -256,19 +320,30 @@ A block is a method and the variables it proposes: `Block(TPE(), window_size)`, 
 tools)`. You pass the same Python objects you declared in `@tunable`, so declare each variable once as a variable and
 use it in both places (`document_reader.py` does). A component stands for every variable declared in it. Any variable no
 block names goes to a default block for its type: `structure` for `OneOf` and `Switch`, `numbers` for `Int`, `Float` and
-`Choice`, `text` for `TextValue`, `skills` for `SkillLibrary`.
+`Choice`, `text` for `TextValue`, `skills` for `SkillLibrary`, `programs` for `Program`.
 
 The methods are:
 
 - `TPE(seed=None, n_startup_trials=4, **options)`: Optuna's multivariate tree-structured Parzen estimator, with one
-  Optuna study per combination of the choices outside its block. It is random for its first `n_startup_trials`
-  candidates. The default `structure` block uses 2, because it is asked only once a round.
+  landscape per combination of the choices outside its block. Before each proposal the landscape's Optuna study is
+  rebuilt from every trial it was told, each with its candidate's current decided value, so TPE learns from what the
+  study decides now and never compares values from different fits of the model. It is random for its first
+  `n_startup_trials` candidates. The default `structure` block uses 2, because it is asked only once a round.
 - `Optuna(sampler)`: any Optuna sampler, as in `Optuna(lambda: optuna.samplers.GPSampler())`.
 - `Reflection(over_limit_retries=2, **options)`: an LLM agent that rewrites a block's texts. It reads every candidate
   measured so far, ranked for the goal, and the incumbent's trials labelled by success or failure, then writes each text
-  it changes in full. The default model is `global.anthropic.claude-sonnet-5-5`; change it with
-  `Reflection(model_config={"model_id": ...})`.
+  it changes in full. Each measured version is a folder of its own, its results in `version.md` and each text alone in
+  `<name>.txt`, so a text the agent copies to start from is the text and nothing else; a submission that carries a
+  version's header is refused, and the agent is told why and asked again. The default model is
+  `global.anthropic.claude-sonnet-5-5`; change it with `Reflection(model_config={"model_id": ...})`.
 - `SkillCuration(**options)`: creates, revises and retires skills in a `SkillLibrary`.
+- `ProgramProposer(model=None, *, model_id=None, max_tokens=32000, load_retries=2)`: an agent that writes a new version
+  of each `Program` in its block. It reads the interface, the environment the program runs in (`Program(context=...)`),
+  the held version, every version measured so far with its goal metrics, the digest of the held version's trials and
+  the transcripts of those that did not succeed, and replies with a module. A seed not yet measured is proposed first,
+  with no model call. A version that does not load, or a reply cut off at the output limit, is sent back in the same
+  conversation up to `load_retries` times. The default model is `global.anthropic.claude-sonnet-5-5` on Bedrock, in
+  `AWS_REGION` (default `us-west-2`); `model=` takes any Strands model, or a function that returns a fresh one.
 - `Thompson(seed=None)`: Thompson sampling on the study's model, for blocks of choices. It needs BayesBench.
 
 ### The schedule
@@ -280,7 +355,10 @@ candidate so far.
 - `Alternate(*blocks, iterations=1)` moves one block at a time, in turn.
 - `Nested(outer, inner, inner_iterations)` runs rounds. A round opens with one candidate from the outer block (say,
   which context manager), then runs `inner` (default `Joint()`) for `inner_iterations` steps (default 4) under that
-  choice, and tells the outer method the round's best. Rounds can nest to any depth.
+  choice, and tells the outer method the round's best. A round's inner steps always run under its own outer choice:
+  until one of its candidates can be held (meets what the round's goal requires), they hold the round's opener, and a
+  round none of whose candidates can be held tells the outer method the one that comes closest, so it learns that the
+  choice fell short. Rounds can nest to any depth.
 
 Without a schedule of your own, the study nests the structural blocks in rounds, outermost first, around `Alternate()`
 over the rest (`Search(within=...)` changes the inner schedule); a space with no structural block runs `Joint()`. In the
@@ -314,7 +392,7 @@ A trial is one case run once. Each candidate runs every case `repetitions` times
 | Status | Meaning | Counts as |
 |---|---|---|
 | `completed` | the agent finished and the evaluators scored it | its scores |
-| `agent_failure` | the agent raised | the worst end of each score's range (`agent_error_score="worst"`) |
+| `agent_failure` | the agent raised (an OpenAI-compatible server's refusal, such as a 400, included) | the worst end of each score's range (`agent_error_score="worst"`) |
 | `infrastructure_invalid` | throttling, a dropped connection, or a task that raised `TrialInvalid` | nothing; run again up to `retries` (2) times |
 | `verifier_invalid` | every evaluator failed | nothing |
 
@@ -356,7 +434,7 @@ directory/
   test.jsonl         the test: test, one tested event per arm, test_end
   result.json        what Study.optimize() returned (Result.to_dict())
   effects.json       each setting's effect on each goal metric, from the model
-  artifacts/         what methods wrote: skill-library versions, the rewriter's digests
+  artifacts/         what methods wrote: skill-library versions, program versions (programs/<hash>/), digests
 ```
 
 The ledger counts tokens by role and phase. The roles are `agent` (the agent under optimization, every attempt of every
@@ -531,11 +609,12 @@ between 1/1.9 and 1/4 of the searches run one after another.
 
 ## Running the benchmark examples
 
-Both examples tune `create_harness` (from `strands-harness`) on Claude Haiku 5.5 over three search spaces: `prompt` (the
-harness's instructions), `numbers` (thinking effort and the context manager's thresholds) and `full` (both, plus tool
-descriptions, the todos plugin, and a choice of context manager, searched in rounds). The goals are `best`, `budget`,
-`cheapest`, `joint` (Pareto) and `floor`, on reward and weighted tokens (each token kind weighted by its price relative
-to an uncached input token). `--help` lists every option.
+The τ² and AppWorld examples tune `create_harness` (from `strands-harness`) on Claude Haiku 5.5 over three search
+spaces: `prompt` (the harness's instructions), `numbers` (thinking effort and the context manager's thresholds) and
+`full` (both, plus tool descriptions, the todos plugin, and a choice of context manager, searched in rounds). The goals
+are `best`, `budget`, `cheapest`, `joint` (Pareto) and `floor`, on reward and weighted tokens (each token kind weighted
+by its price relative to an uncached input token). `--help` lists every option. The ALFWorld example tunes a small
+open-weight model's own harness on an OpenAI-compatible endpoint, and a program-valued macro tool.
 
 A full study is expensive. With 4 candidates a step and 12 steps, our studies spent these totals (raw tokens, then
 weighted as input-equivalent tokens):
@@ -606,6 +685,74 @@ study took 7.5 minutes and 7.0 million tokens. The models are `APPWORLD_AGENT_MO
 `us.anthropic.claude-haiku-5-5`) and `APPWORLD_REFLECTION_MODEL` (default `us.anthropic.claude-sonnet-5-5`). Keep
 `--concurrency` at 100 or below; the FAQ says why.
 
+### ALFWorld, on an OpenAI-compatible endpoint
+
+`alfworld_harness.py` tunes a small open-weight model's harness: Qwen3.5-2B playing ALFWorld's text games (TextWorld
+versions of ALFRED's household tasks) through Strands' `OpenAIModel`, with one tool, `act`, that runs a game command.
+Its spaces tune the system prompt and `act`'s description (`text`), thinking and the sampling temperature (`mini`),
+whether the game's admissible commands are shown (`mini-hints`), the conversation manager (`L2`, and `L2h` or `full`
+with the hints), and a macro, a second tool written as a program (`macro`, `macro-helper`); `--macro` adds the macro to
+any space and `--skills` a skill library. Its goals are the τ² example's, on the share of games won and weighted
+tokens. A study searches on games drawn from ALFWorld's train split (`--search-per-type` of each of its six task
+types), selects on other train games (`--validation-per-type`), and tests on all 134 games of `valid_unseen`.
+
+```bash
+pip install -e ".[optimization]" alfworld "strands-agents[openai]"
+export ALFWORLD_DATA=~/.cache/alfworld
+alfworld-download
+```
+
+The model server is yours to run. With vLLM on the same machine, bound to loopback (vLLM listens on every interface
+unless given `--host`):
+
+```bash
+export ALFWORLD_MODEL=...   # the model's id: vLLM serves it under the name it was started with
+vllm serve "$ALFWORLD_MODEL" --host 127.0.0.1 --port 8000 --max-model-len 32768 \
+    --enable-auto-tool-choice --tool-call-parser ...   # the tool-call parser vLLM documents for the model
+```
+
+`ALFWORLD_BASE_URL` defaults to `http://127.0.0.1:8000/v1`, that server. Any OpenAI-compatible endpoint works: set
+`ALFWORLD_BASE_URL` to its `/v1` URL and `ALFWORLD_MODEL` to the id it lists under `/v1/models`. For a server on another
+machine, such as a GPU host, keep it bound to 127.0.0.1 there and forward the port over SSH rather than publishing it:
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 you@gpu-host   # the default ALFWORLD_BASE_URL then reaches it
+```
+
+The client sends the placeholder API key `EMPTY`, which a vLLM server started without `--api-key` accepts; for an
+endpoint that needs a key, change `client_args` in `model()` in `alfworld_harness.py`. `ALFWORLD_CONTEXT` (default
+32768) is the context window the agent assumes, so keep it at the server's `--max-model-len`, and `ALFWORLD_MAX_TOKENS`
+(default 8192) bounds each reply, thinking included. Qwen3.5's chat template refuses a conversation without a user
+message, so every sliding window the example builds keeps the first message (the room and the task); that needs a
+recent `strands-agents` (`SlidingWindowConversationManager(pin_first=...)`; the tests ran on 1.62.0). The rewriter
+(`ALFWORLD_REFLECTION_MODEL`, default `global.anthropic.claude-sonnet-5-5`) and the macro's proposer
+(`ProgramProposer`'s default model, in `AWS_REGION`) run on Bedrock.
+
+```bash
+# the default harness on the first 12 valid_unseen games, once each
+python examples/optimization/alfworld_harness.py --baseline --test-games 12 --repetitions 1 --concurrency 12 \
+    --out alfworld-baseline.json
+
+# a small study of the prompt, thinking and temperature: 2 + 1 train games of each task type, 12 test games
+BYPASS_TOOL_CONSENT=true python examples/optimization/alfworld_harness.py --space mini --goal best \
+    --search-per-type 2 --validation-per-type 1 --test-games 12 --repetitions 1 --iterations 3 --width 2 \
+    --concurrency 24 --out studies
+
+# the macro alone, from none: ProgramProposer writes it from the baseline's trials
+python examples/optimization/alfworld_harness.py --space macro --goal best \
+    --search-per-type 2 --validation-per-type 1 --test-games 12 --repetitions 1 --iterations 3 --width 2 \
+    --concurrency 24 --out studies
+```
+
+A macro is a subclass of `Macro` (`alfworld_programs.py`): a tool with a `description`, string `parameters` and
+`run(act, start, **arguments)`, which plays commands through `act` and returns what the agent reads. Its commands count
+toward the game's 50, and each call is recorded with the commands it ran, which the proposer reads under the call in
+each transcript. `HelperMacro` (the `macro-helper` space, or `make_study(..., macro="helper")`) runs at most 8 commands
+a call, sees the room without the task line, and refuses the task sentence as an argument, so it helps the agent rather
+than playing the game for it. Each trial plays its game in a process of its own (`alfworld_game.py`), so
+`--concurrency` (default 128) games run at once. The defaults (12 + 6 train games of each type, every `valid_unseen`
+game, 2 repetitions, 16 steps of 4 candidates) are a full study.
+
 ### Terminal-Bench
 
 The Terminal-Bench 2.1 example is not on this branch. It needs Docker, Harbor and the task images, and it was written
@@ -617,7 +764,9 @@ Nothing the examples start is reachable from another machine. Each AppWorld tria
 AppWorld's server binds every interface with no option to change it, so `appworld_workload.py` starts it through a
 wrapper that binds 127.0.0.1, checks the address the server reports, and stops any server that reports another address.
 Never run AppWorld's own `--docker` mode for these studies: it publishes the port on every interface. The τ² example
-starts no server; τ² runs its environments in process. Model calls go out to Bedrock and nothing comes in.
+starts no server; τ² runs its environments in process. Model calls go out to Bedrock and nothing comes in. The
+ALFWorld example starts no server either: each game runs in a child process that talks over its stdin and stdout. Its
+model server is the one you start, bound to 127.0.0.1 as above.
 
 ## Known limitations and results so far
 
@@ -644,6 +793,9 @@ RRSI at matched budgets, every number on held-out test cases with 90% intervals 
   GEPA's 98.2% and 81.1%; a gain floor on AppWorld beat GEPA on reward but cost 1.40 times its tokens. Reward first,
   then cost (`PrimaryFirst`) and `unmet="closest"` were added in response, and their experiments are still running. No
   result yet supports a cheaper harness at equal reward.
+- Program-valued variables are new. Their loading restrictions are not a sandbox: a version runs in the study's
+  process, so run such studies where model-written code is acceptable. Running each version in a worker process with
+  a deadline is the next step at the same boundary.
 - A study cannot resume. A run that stops keeps its record, but `optimize()` starts a new study; there is no resume from
   a record yet.
 - The validation model is not checked the way the search model is. During search, the held-out check moved the incumbent
@@ -725,12 +877,15 @@ policy objects (`allocation`, `value`, `start`, `order`), so racing outer choice
 policy rather than a new schedule. `phases.PrimaryFirst` is a schedule built on the same hooks (`aims`, `finalists`,
 `decide`).
 
-### Later: control flow as a variable
+### Another kind of written variable
 
-The framework searches structure, settings and text. The harness's control flow, the program that calls the model and
-the tools, is planned as a value of its own (a `Program` declaration) with a method that proposes code. The record
-already reserves keys for a program's parameters, per version (`<key>.<version>.<parameter>`), and keeps probe runs
-apart from candidates. Nothing searches control flow yet.
+`Program` and `ProgramProposer` (`programs.py`) are built on seams that any domain defined outside the package can use.
+Such a domain declares its own `param_info(key, active_when)`, checks its own values (`check_value`), resolves a stored
+value to what the factory receives (`resolve`), and says that a model writes its values (`written = True`: never
+sampled, and modelled as rewritten or not, as text is). `register_kind(kind, types, method)` gives the kind its default
+block and method, and a study answers the domain's `suggest_<kind>` call through the draw of the block that holds it.
+The harness's control flow, the program that calls the model and the tools, can be declared as a `Program` today; no
+example searches it yet.
 
 ## FAQ and troubleshooting
 
@@ -809,6 +964,7 @@ src/strands_evals/optimization/
   space/          @tunable, the domains, component, OneOf, Switch, tool_descriptions, SkillLibrary
   search.py       Search: blocks, schedule, width, redraws, phases
   methods.py      Block, Method, Draw; TPE, Optuna, Thompson, Reflection, SkillCuration
+  programs.py     Program, ProgramProposer, the loader and its restrictions, run_bounded
   schedules.py    Joint, Alternate, Nested and its policies
   phases.py       PrimaryFirst, Stall, Seesaw, the anchor and its paired evidence
   projection.py   metrics, Derived, objectives, constraints, the combinations

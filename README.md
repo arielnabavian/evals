@@ -48,7 +48,7 @@ Strands Evaluation is a powerful framework for evaluating AI agents and LLM appl
 - **Failure Detection & Root Cause Analysis**: Automatically detect failures in agent sessions and diagnose root causes with actionable fix recommendations
 - **Chaos Testing**: Deterministic fault injection via Strands plugin hooks — simulate tool timeouts, network errors, and response corruption to evaluate agent resilience
 - **Red Team Evaluation**: Adversarial safety testing with built-in attack strategies (Crescendo, GOAT, PAIR, BadLikertJudge, SequentialBreak); see [src/strands_evals/experimental/redteam/README.md](src/strands_evals/experimental/redteam/README.md)
-- **Harness Optimization**: Tune an agent's prompts, tool descriptions, settings and components against an experiment while the model stays fixed, selecting on validation cases and testing on cases the search never saw; see [src/strands_evals/optimization/README.md](src/strands_evals/optimization/README.md)
+- **Harness Optimization**: Tune an agent's prompts, tool descriptions, settings, components and code against an experiment while the model stays fixed, selecting on validation cases and testing on cases the search never saw; see [src/strands_evals/optimization/README.md](src/strands_evals/optimization/README.md)
 
 ## Quick Start
 
