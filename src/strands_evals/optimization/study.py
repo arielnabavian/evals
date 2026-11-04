@@ -453,6 +453,8 @@ class Study:
         self.params = {p.key: p for p in self.agent.params()}
         check_json(self.params.values())  # every value is recorded as JSON: a default or option that is not, fails here
         self._skills = [k for k, p in self.params.items() if p.type == "skills"]  # values stored in the artifact store
+        # every value stored in the artifact store: skill libraries and any domain that resolves its own (a program)
+        self._stored = self._skills + [k for k, p in self.params.items() if hasattr(p.domain, "resolve")]
         self._stored_defaults: dict[str, dict[str, str]] = {}  # each default library, as declared and as stored
         blocks, self._names = resolve_blocks(self.params, self.search.blocks, self.agent.references())
         self.blocks = {b.name: b for b in blocks}
@@ -595,7 +597,7 @@ class Study:
     def _artifact_root(self) -> Path | None:
         """The artifact store, where the space has values stored in it (skill libraries); else None (no directory is
         made)."""
-        return self.artifacts if self._skills else None
+        return self.artifacts if self._stored else None
 
     def _store_defaults(self) -> None:
         """Store each default skill library in the artifact store, so the baseline holds a stored version like every
@@ -994,7 +996,7 @@ class Study:
         """The texts each method rewrites together, by block."""
         out = {}
         for name, block in self.blocks.items():
-            keys = [k for k in block.keys if self.params[k].type in ("text", "skills")]
+            keys = [k for k in block.keys if self.params[k].written]
             if keys:
                 out[name] = keys
         return out
@@ -1612,7 +1614,7 @@ class Study:
         at once, with the study's task and retries: the one place the study runs trials (search, re-measurement,
         validation and test alike), awaited through ``_run``. What the trials spent counts in ``phase``. The factory
         receives the values with each stored one (a skill-library version) resolved to its path."""
-        if self._skills:
+        if self._stored:
             values = self.agent.resolve(values, self.artifacts)
         trials = await run_trials(
             self.agent,
@@ -1770,6 +1772,13 @@ class _Source:
 
     def suggest_skills(self, name: str, default: str | None) -> str | None:
         return self._value(name, lambda d: d.suggest_skills(name, default))
+
+    def __getattr__(self, attr: str) -> Any:
+        """A domain defined outside the package asks for its value by its own name (``suggest_<kind>``), answered by
+        the draw of the block that holds it, as every other kind is."""
+        if not attr.startswith("suggest_"):
+            raise AttributeError(attr)
+        return lambda name, *args, **kwargs: self._value(name, lambda d: getattr(d, attr)(name, *args, **kwargs))
 
 
 __all__ = ["AtLeast", "AtMost", "Maximize", "Minimize", "Scope", "Study", "Candidate", "constraint_name"]

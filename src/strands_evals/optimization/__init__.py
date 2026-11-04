@@ -25,7 +25,8 @@ them), ``Alternate(...)`` (one at a time), or ``Nested(outer=..., inner=...)`` (
 bounded inner search, compared at its best; nests to any depth; its rules are policies: ``allocation``, ``value``,
 ``start`` and ``order``). By default every variable is in a block for its type
 (choices and numbers by Optuna's TPE, ``TextValue`` by contrastive reflection, ``SkillLibrary`` by skill-library
-curation) and the schedule is built from the space.
+curation, ``Program`` by a proposer agent that writes its code: ``programs.py``) and the schedule is built from the
+space.
 
 Several objectives are given wrapped in how they combine: ``Pareto(...)`` (jointly), ``Independent(...)`` (one copy of
 every method per objective), ``WeightedSum(...)``, ``Chebyshev(...)``, ``Lexicographic(...)`` or
@@ -50,6 +51,7 @@ as declared).
 from .cost import Cost
 from .methods import TPE, Block, Draw, Method, Optuna, Reflection, SkillCuration, Thompson
 from .phases import PrimaryFirst, Seesaw, Stall
+from .programs import EMPTY, Program, ProgramProposer
 from .projection import (
     AtLeast,
     AtMost,
@@ -102,6 +104,7 @@ from .study import Candidate, Scope, Study
 from .trials import Trial, TrialInvalid, TrialStatus
 
 __all__ = [
+    "EMPTY",
     "Allocation",
     "Alternate",
     "AtLeast",
@@ -136,6 +139,8 @@ __all__ = [
     "OuterThenInner",
     "Pareto",
     "PrimaryFirst",
+    "Program",
+    "ProgramProposer",
     "Reflection",
     "RoundOrder",
     "RoundStart",

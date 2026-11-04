@@ -19,7 +19,7 @@ import importlib
 import json
 import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from .domains import Choice, Domain, Float, Int, SkillLibrary, SuggestionTrial, TextValue
@@ -44,6 +44,14 @@ class ParamInfo:
     active_when: tuple[str, str] | None = None  # (selector key, option)
     about: str | None = None  # text and skills: what the value is, for the model that rewrites it
     max_chars: int | None = None  # text: the longest value that is measured
+    # a domain defined outside the package (see ``params``): the declared object, which validates and resolves values
+    domain: Any = field(default=None, compare=False, repr=False)
+
+    @property
+    def written(self) -> bool:
+        """Whether a model writes this variable's values (text, skills, a plug-in domain that says so): never sampled,
+        and modelled as rewritten or not."""
+        return self.type in ("text", "skills") or bool(getattr(self.domain, "written", False))
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"key": self.key, "type": self.type, "default": self.default}
@@ -55,6 +63,10 @@ class ParamInfo:
             out["about"] = self.about
         if self.max_chars is not None:
             out["max_chars"] = self.max_chars
+        if self.written and self.type not in ("text", "skills"):  # a plug-in domain a model writes (a program)
+            out["written"] = True
+        if hasattr(self.domain, "record_settings"):  # a plug-in domain's declared settings (a program's interface)
+            out["settings"] = self.domain.record_settings()
         out["active_when"] = {"key": self.active_when[0], "option": self.active_when[1]} if self.active_when else None
         return out
 
@@ -90,6 +102,8 @@ def params(spec: Any, key: str, active_when: tuple[str, str] | None = None) -> l
         ]
     if isinstance(spec, SkillLibrary):
         return [ParamInfo(key, "skills", spec.default, active_when=active_when, about=spec.about)]
+    if isinstance(spec, Domain) and hasattr(spec, "param_info"):  # a domain defined outside the package
+        return [spec.param_info(key, active_when)]
     if isinstance(spec, Component):
         out: list[ParamInfo] = []
         for name, arg in spec.arguments.items():
@@ -251,6 +265,10 @@ def validate_value(info: ParamInfo, value: Any, artifacts: Any = None) -> None:
                 problem += " (a value a study stored is relative to its artifact store: see Study.artifact_path)"
             if problem:
                 raise SpaceError(f"{info.key}: {problem}")
+    elif hasattr(info.domain, "check_value"):  # a domain defined outside the package checks its own values
+        problem = info.domain.check_value(value, artifacts)
+        if problem:
+            raise SpaceError(f"{info.key}: {problem}")
     elif value not in info.choices:
         raise SpaceError(f"{info.key}={value!r} is not one of {list(info.choices)}")
 
@@ -312,7 +330,7 @@ def distributions(spec: Any, values: Mapping[str, Any], key: str) -> dict[str, A
             out[info.key] = d.FloatDistribution(info.low, info.high, log=info.log, step=info.step)
         elif info.type == "int":
             out[info.key] = d.IntDistribution(int(info.low), int(info.high), log=info.log, step=int(info.step or 1))
-        elif info.type in ("text", "skills"):
+        elif info.written:
             continue  # written by a model, not sampled
         else:
             out[info.key] = d.CategoricalDistribution(list(info.choices))

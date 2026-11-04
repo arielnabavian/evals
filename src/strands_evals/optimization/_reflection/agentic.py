@@ -155,7 +155,15 @@ def _case_cost(rs: Sequence[dict], costs: Sequence[str]) -> str:
     return ", ".join(parts)
 
 
-def digest_text(rows: Sequence[dict], threshold: float, limit: int, costs: Sequence[str] = ()) -> str:
+TRACE_FILES = (
+    "Each conversation is a file in this folder: its messages in `response.messages`, its `reward`, `output` (how it "
+    "ended) and `metrics`."
+)
+
+
+def digest_text(
+    rows: Sequence[dict], threshold: float, limit: int, costs: Sequence[str] = (), where: str = TRACE_FILES
+) -> str:
     """The digest of every trace: a header, then every case with a conversation whose reward is below ``threshold``
     (each such conversation: its file, reward, how it ended, the evaluators' reasons, its size), then the cases where
     every conversation succeeded. Its fields are cut until it fits in ``limit`` characters; every case that did not
@@ -163,7 +171,9 @@ def digest_text(rows: Sequence[dict], threshold: float, limit: int, costs: Seque
 
     ``costs``: metrics (each conversation's, among its objectives) the digest gives per case for every case: the
     total over the conversations in the header, and each case's mean beside it, the cases that succeeded listed most
-    costly first, so a rewriter that is lowering cost sees where it goes without losing a success (round 3d)."""
+    costly first, so a rewriter that is lowering cost sees where it goes without losing a success.
+
+    ``where``: the sentence that says where each conversation can be read (default: the files beside the digest)."""
     by_case: dict[str, list[dict]] = {}
     for r in rows:
         by_case.setdefault(r["case"], []).append(r)
@@ -186,8 +196,7 @@ def digest_text(rows: Sequence[dict], threshold: float, limit: int, costs: Seque
         f"# Digest: the current version's {len(rows)} conversations, {len(by_case)} cases",
         "",
         f"{bad} conversations did not succeed (reward below {threshold:g}), in {len(failing)} cases; "
-        f"every case where every conversation succeeded: {len(passing)}. Each conversation is a file in this folder: "
-        "its messages in `response.messages`, its `reward`, `output` (how it ended) and `metrics`.",
+        f"every case where every conversation succeeded: {len(passing)}. {where}",
         "",
     ]
     if costs:

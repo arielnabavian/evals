@@ -109,7 +109,7 @@ def _factors(
         key, kind = row["key"], row["type"]
         present = [t["params"][key] for t in candidates if key in t["params"]]
         absent = [MISSING] if any(key not in t["params"] for t in candidates) else []
-        if kind in ("text", "skills"):
+        if kind in ("text", "skills") or row.get("written"):  # a program is written too: its rewrites are the factor
             # the text itself is not a factor (each rewrite is its own value); how many rewrites deep it is, is
             depth = rewrites(key, str(row["default"]), blocks.get(key, ""), every)
             names = {d: ("default" if d == 0 else str(d) if d < 3 else "3+") for d in depth.values()}

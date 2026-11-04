@@ -173,7 +173,7 @@ class Design:
         self.omitted: list[dict[str, str]] = []
         in_texts = {k for keys in text_blocks.values() for k in keys}
         for key, info in space.items():
-            if key in in_texts or info.type in TEXTS or info.type in ("component", "fixed"):
+            if key in in_texts or info.type in TEXTS or info.written or info.type in ("component", "fixed"):
                 continue
             present = [p[key] for p in params if key in p]
             absent = [MISSING] if any(key not in p for p in params) else []

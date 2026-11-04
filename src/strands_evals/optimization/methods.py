@@ -1043,6 +1043,14 @@ KINDS = {"structure": SELECTORS, "numbers": ("float", "int", "choice"), "text": 
 # never selected). 2: the baseline and one random round, then TPE's model chooses each round from the rounds' results.
 # A structure block given in Search(blocks=...) keeps its own TPE(n_startup_trials=...).
 STRUCTURE_STARTUP = 2
+DEFAULT_METHODS: dict[str, Callable[[], Method]] = {"text": Reflection, "skills": SkillCuration}  # any other: TPE
+
+
+def register_kind(kind: str, types: Sequence[str], method: Callable[[], Method]) -> None:
+    """Add a kind of variable defined outside the package: its default block is named ``kind``, holds the variables of
+    ``types`` (a plug-in domain's ``ParamInfo.type``) no block names, and is proposed by a fresh ``method()``."""
+    KINDS[kind] = tuple(types)
+    DEFAULT_METHODS[kind] = method
 
 
 def _kind(types: set[str]) -> str | None:
@@ -1098,15 +1106,7 @@ def resolve_blocks(
         names[id(given[i])] = name
         out.append((name, method, keys))
     for kind, keys in defaults.items():
-        method = (
-            Reflection()
-            if kind == "text"
-            else SkillCuration()
-            if kind == "skills"
-            else TPE(n_startup_trials=STRUCTURE_STARTUP)
-            if kind == "structure"
-            else TPE()
-        )
+        method = TPE(n_startup_trials=STRUCTURE_STARTUP) if kind == "structure" else DEFAULT_METHODS.get(kind, TPE)()
         out.append((unique(kind), method, keys))
     if len({name for name, _, _ in out}) != len(out):
         raise ValueError(f"two blocks have the same name: {[name for name, _, _ in out]}")

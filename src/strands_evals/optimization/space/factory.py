@@ -94,6 +94,8 @@ class TunableFactory(Generic[T]):
         for info in self.params():
             if info.type == "skills" and info.key in values:
                 values[info.key] = skills.resolve(values[info.key], artifacts)
+            elif hasattr(info.domain, "resolve") and info.key in values:  # a domain defined outside the package
+                values[info.key] = info.domain.resolve(values[info.key], artifacts)
         return Values(values)
 
     def distributions(self, values: Values | Mapping[str, Any]) -> dict[str, Any]:

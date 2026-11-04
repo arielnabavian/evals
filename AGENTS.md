@@ -202,6 +202,7 @@ strands-evals/
 │   │   ├── phases.py                         # PrimaryFirst: reward first, then cost (cost goals' default)
 │   │   ├── search.py                         # Search: blocks, schedule, redraws
 │   │   ├── methods.py                        # Block, Method, TPE/Optuna, Reflection, SkillCuration
+│   │   ├── programs.py                       # Program (a class whose versions a model writes), ProgramProposer
 │   │   ├── projection.py                     # metrics, objectives, constraints, estimates, combinations
 │   │   ├── trials.py                         # Trial (one case, one repetition) and TrialStatus
 │   │   ├── record.py                         # the study's record on disk (study.jsonl)
