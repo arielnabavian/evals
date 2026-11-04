@@ -33,8 +33,9 @@ Events (``format: strands_evals.optimization``, schema 3):
   with ``Independent``, as ``objective``'s methods are told it). A step that repeats proposes again; a round whose
   opening proposal repeats opens on ``candidate``, and its outer draw is told the round's best later (``told``).
 - ``told``: a deferred draw (a round's outer proposal, made in ``draw_candidate``) was told ``candidate``, the round's
-  best
-  (null: the round had no comparable candidate, and the draw failed).
+  best, or when none of the round's candidates can be held (phase B: none keeps A*'s level) the closest to it (null:
+  the round had no eligible candidate, and the draw failed). ``values`` (here, and a candidate's ``told``) are as
+  decided when it was told: an Optuna landscape tells every trial again, as decided then, before each proposal.
 - ``scope_end``: a scope finished, having run ``ran`` candidates over ``blocks`` (the blocks that existed in it); a
   round that opened on an earlier candidate does not count it.
 - ``model``: one fit of the model of every goal metric (its factors, diagnostics, and every candidate's decided values

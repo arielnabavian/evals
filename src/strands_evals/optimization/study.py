@@ -147,6 +147,7 @@ class Scope:
         self.capacity = limit * self.width if capacity is None else capacity
         self.opener_slots = self.width if opener_slots is None else opener_slots
         self.candidates: list[Candidate] = []  # the candidates run in this scope and its children
+        self.opener: Candidate | None = None  # a round's opening candidate (its outer values), once it has one
         self.steps = 0  # the steps run in this scope and its children
         self.used = 0  # the budget they spent, in candidates (a step: Search.width; an opener: opener_slots)
         self._deferred: dict[str, tuple[Draw, int]] = {}
@@ -184,7 +185,9 @@ class Scope:
 
     def incumbent(self, objective: int | None = None) -> Candidate:
         """The candidate other values are held at: the best of this scope's candidates (the root holds from every
-        candidate in the study), else the enclosing scope's."""
+        candidate in the study), else, in a round, its opener (a round holds its outer values: a candidate outside it
+        has other outer values, so its inner steps would search another landscape than the one its outer draw is told
+        about), else the enclosing scope's."""
         k = objective if objective is not None else self.objective
         pool = self.study.candidates if self.parent is None else self.candidates
         if self.seed is not None and all(c.number != self.seed.number for c in pool):
@@ -192,12 +195,20 @@ class Scope:
         held = self.study._held(pool, k)
         if held is not None:
             return held
+        if self.opener is not None:  # none of the round's candidates can be held yet (phase B: none keeps A*'s level)
+            return self.study.candidates[self.opener.number]
         return self.parent.incumbent(objective) if self.parent else self.study.baseline
 
     def best(self, objective: int | None = None) -> Candidate | None:
         """The best of this scope's own candidates, or None when none of them can be compared."""
         k = objective if objective is not None else self.objective
         return self.study._held(self.candidates, k)
+
+    def nearest(self, objective: int | None = None) -> Candidate | None:
+        """When none of this scope's candidates can be held (``best`` is None; in phase B, none keeps A*'s level): the
+        eligible one that comes closest to what its aim requires, as its methods are told it (``Study._nearest``)."""
+        k = objective if objective is not None else self.objective
+        return self.study._nearest(self.candidates, k)
 
     def step(
         self,
@@ -238,6 +249,8 @@ class Scope:
         if not made:
             return None
         candidate, draws = made[0]
+        if role == "outer":
+            self.opener = candidate
         for block in defer:
             if block in draws:
                 self._deferred[block] = (draws[block], candidate.number)
@@ -311,10 +324,14 @@ class Scope:
         """Keep only the blocks with variables under ``candidate``'s choices."""
         self.blocks = tuple(b for b in self.blocks if self.study.active(b, candidate.params))
 
-    def tell(self, block: str, candidate: Candidate | None) -> None:
-        """Give ``block``'s deferred draw the result that stands for it (None: it failed)."""
+    def tell(
+        self, block: str, candidate: Candidate | None, standing: Callable[[], Candidate | None] | None = None
+    ) -> None:
+        """Give ``block``'s deferred draw the result that stands for it (None: it failed). ``standing``: how to find
+        that candidate again as the study's decisions change (a round's value, asked again), for methods that re-tell
+        what they were told (``Optuna``)."""
         draw, number = self._deferred.pop(block)
-        self.study._tell(block, draw, number, candidate, objective=self.objective, scope=self)
+        self.study._tell(block, draw, number, candidate, objective=self.objective, scope=self, standing=standing)
 
     def __enter__(self) -> "Scope":
         return self
@@ -951,6 +968,23 @@ class Study:
     def _held(self, pool: Sequence[Candidate], objective: int | None) -> Candidate | None:
         held = self.aim(objective).held(self.projection, self._views(pool), objective, self.view(self.baseline))
         return held.candidate if held is not None else None
+
+    def _nearest(self, pool: Sequence[Candidate], objective: int | None) -> Candidate | None:
+        """The eligible candidate of ``pool`` that misses what ``objective``'s aim requires least, as its methods are
+        told it: the least total violation of its told constraints (phase B: the margin against A*), then the best told
+        value of its first objective. None when none is eligible."""
+        aim = self.aim(objective)
+        views: list[Any] = [self.view(c) for c in pool if c.eligible]  # told as views, as every method is told
+        if not views:
+            return None
+        baseline: Any = self.view(self.baseline)
+        sign = 1.0 if aim.directions(self.projection, objective)[0] == "maximize" else -1.0
+
+        def key(v: Any) -> tuple[float, float, int]:
+            excess = sum(max(x, 0.0) for x in aim.told_constraints(self.projection, v).values())
+            return (excess, -sign * aim.told(self.projection, v, objective, baseline)[0], v.number)
+
+        return min(views, key=key).candidate
 
     def _decided_best(self) -> list[Candidate]:
         best = self.combine.best(self.projection, self._views(self.candidates), self.view(self.baseline))
@@ -1620,11 +1654,22 @@ class Study:
                 methods[name].observe(self.blocks[name], candidate, draws.get(name) if mine else None, self, k)
 
     def _tell(
-        self, block: str, draw: Draw, number: int, candidate: Candidate | None, *, objective: int | None, scope: Scope
+        self,
+        block: str,
+        draw: Draw,
+        number: int,
+        candidate: Candidate | None,
+        *,
+        objective: int | None,
+        scope: Scope,
+        standing: Callable[[], Candidate | None] | None = None,
     ) -> None:
         """Tell the copy that drew ``draw`` (in candidate ``number``) the result that stands for it, and give that
-        result to the block's other copies as evidence."""
+        result to the block's other copies as evidence. ``standing`` finds that result again as decided later (the
+        draw keeps it: ``Optuna`` re-tells it before each proposal)."""
         k = objective or 0
+        if standing is not None and candidate is not None and hasattr(draw, "standing"):
+            draw.standing = standing
         for i, methods in enumerate(self.methods):
             if i == k:
                 methods[block].observe(self.blocks[block], candidate, draw, self, i)

@@ -165,9 +165,111 @@ def context(block: Block, params: dict[str, Any], study: "Study") -> tuple:
 
 
 # ---- Optuna ---------------------------------------------------------------------------------------------------------
+CONSTRAINTS = "constraints:"  # the prefix of the system attributes Optuna keeps a trial's constraint values in
+
+
+def _kept(attrs: dict[str, Any]) -> dict[str, Any]:
+    """What a trial's sampler wrote for it, kept when its landscape is rebuilt; not its constraints, which Optuna keeps
+    among the same attributes, and which would then never be judged again."""
+    return {k: v for k, v in attrs.items() if not k.startswith(CONSTRAINTS)}
+
+
+class _Entry:
+    """One trial of a landscape, in the order it was told: the block's values (as proposed, or as a candidate it did not
+    propose holds them) and the candidate whose result stands for them, so that its value can be told again as the
+    study's decisions change. A draw not yet told is pending (``number`` None); one that could not be told failed."""
+
+    __slots__ = ("params", "distributions", "number", "failed", "draw", "standing", "attrs")
+
+    def __init__(
+        self,
+        params: dict[str, Any],
+        distributions: dict[str, Any],
+        number: int | None = None,
+        draw: "_OptunaDraw | None" = None,
+    ) -> None:
+        self.params, self.distributions, self.number, self.draw = params, distributions, number, draw
+        self.failed = False
+        # how to find the candidate that stands for a draw told at a round's end, as decided now (Scope.tell)
+        self.standing: Callable[[], "Candidate | None"] | None = None
+        self.attrs: dict[str, Any] = {}  # the system attributes its sampler wrote for the trial, kept across rebuilds
+
+    @property
+    def pending(self) -> bool:
+        return self.number is None and not self.failed
+
+
+class _Landscape:
+    """One landscape of an Optuna method (``context``): its sampler, kept for the whole study, and every trial it was
+    told (``_Entry``). Its Optuna study is rebuilt from them before each proposal (``build``), each trial told the
+    current decided value of the candidate that stands for it, so TPE never compares values decided by different fits
+    (the model is refitted after every step, and decides with measured means once its diagnostics flag a metric)."""
+
+    def __init__(self, sampler: Any, objective: int | None, study: "Study") -> None:
+        self.sampler, self.objective, self.study = sampler, objective, study
+        self.entries: list[_Entry] = []
+
+    def candidate(self, entry: _Entry) -> "Candidate | None":
+        if entry.standing is not None:
+            return entry.standing()
+        return self.study.candidates[entry.number] if entry.number is not None else None
+
+    def build(self) -> Any:
+        """A fresh Optuna study holding every trial, in order: each told trial with the current decided value of its
+        candidate (and its constraints as judged now), each failed one failed, and each pending one running, so that
+        Optuna's constant liar still keeps a step's proposals apart."""
+        import optuna
+        from optuna.trial import TrialState, create_trial
+
+        study, k = self.study, self.objective
+        aim = study.aim(k)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
+            built = optuna.create_study(directions=aim.directions(study.projection, k), sampler=self.sampler)
+        built.stop = lambda: None  # the study's budget ends the search, not the sampler (grid, brute force)
+        baseline = study.view(study.baseline)
+        for e in self.entries:
+            if e.pending:  # as its draw's own study holds it now: what it has proposed so far, its sampler's attributes
+                assert e.draw is not None
+                asked = e.draw.study.get_trials(deepcopy=False)[e.draw.ask.number]
+                built.add_trial(
+                    create_trial(
+                        state=TrialState.RUNNING,
+                        params=dict(asked.params),
+                        distributions=dict(asked.distributions),
+                        system_attrs=_kept(asked.system_attrs),
+                    )
+                )
+                continue
+            c = None if e.failed else self.candidate(e)
+            if c is None or not c.eligible:
+                built.add_trial(
+                    create_trial(
+                        state=TrialState.FAIL,
+                        params=e.params,
+                        distributions=e.distributions,
+                        system_attrs=dict(e.attrs),
+                    )
+                )
+                continue
+            decided = study.view(c)
+            built.add_trial(
+                create_trial(
+                    params=e.params,
+                    distributions=e.distributions,
+                    values=aim.told(study.projection, decided, k, baseline),
+                    constraints=aim.told_constraints(study.projection, decided) or None,
+                    system_attrs=dict(e.attrs),  # a copy: create_trial writes the constraints into the dict it is given
+                )
+            )
+        return built
+
+
 class _OptunaDraw(Draw):
-    def __init__(self, ask: Any, study: Any, origin: dict[str, Any]) -> None:
+    def __init__(self, ask: Any, study: Any, origin: dict[str, Any], entry: _Entry | None = None) -> None:
         self.ask, self.study, self.origin = ask, study, origin  # the Optuna trial this draw asked for
+        self.entry = entry  # its trial in the landscape
+        self.standing: Callable[[], "Candidate | None"] | None = None  # set when told at a round's end
 
     def suggest_float(
         self, name: str, low: float, high: float, *, step: float | None = None, log: bool = False
@@ -184,31 +286,37 @@ class _OptunaDraw(Draw):
 class Optuna(Method):
     """An Optuna sampler over the block's numbers and choices: ``Optuna(lambda: optuna.samplers.GPSampler())``.
 
-    It keeps one Optuna study per landscape (``context``: for a non-structural block, each combination of the choices
-    outside it), and every candidate in that landscape is evidence for it, whoever proposed it."""
+    It keeps one landscape per ``context`` (for a non-structural block, each combination of the choices outside it),
+    and every candidate in that landscape is evidence for it, whoever proposed it. A landscape's Optuna study is rebuilt
+    before each proposal from every trial it was told, each with the current decided value of the candidate that stands
+    for it (``_Landscape``): what TPE splits into good and bad is what the study decides now, as its incumbent and its
+    selection are, never a value from an earlier fit. Its sampler is kept across rebuilds, and the attributes the
+    sampler wrote for each trial with it."""
 
     kinds = ("float", "int", "choice", "one_of", "switch")
 
     def __init__(self, sampler: Callable[[], Any] | None = None) -> None:
         self.sampler = sampler
-        self._studies: dict[tuple, Any] = {}
+        self._landscapes: dict[tuple, _Landscape] = {}
 
-    def _study(self, context: tuple, study: "Study", objective: int | None) -> Any:
+    @property
+    def _studies(self) -> dict[tuple, Any]:
+        """Each landscape's Optuna study as it would be built now (for inspection)."""
+        return {given: land.build() for given, land in self._landscapes.items()}
+
+    def _landscape(self, context: tuple, study: "Study", objective: int | None) -> _Landscape:
         import optuna
 
-        if context not in self._studies:
+        if context not in self._landscapes:
             optuna.logging.set_verbosity(optuna.logging.WARNING)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
-                sampler = self._sampler(len(self._studies))
-            directions = study.aim(objective).directions(study.projection, objective)
-            optuna_study = optuna.create_study(directions=directions, sampler=sampler)
-            optuna_study.stop = lambda: None  # the study's budget ends the search, not the sampler (grid, brute force)
-            self._studies[context] = optuna_study
-        return self._studies[context]
+                sampler = self._sampler(len(self._landscapes))
+            self._landscapes[context] = _Landscape(sampler, objective, study)
+        return self._landscapes[context]
 
     def _sampler(self, landscape: int) -> Any:
-        """The sampler for the ``landscape``-th Optuna study this method opens."""
+        """The sampler for the ``landscape``-th landscape this method opens."""
         return self.sampler() if self.sampler else None
 
     def begin(
@@ -221,42 +329,52 @@ class Optuna(Method):
         objective: int | None,
     ) -> Draw:
         given = context(block, structure, study)
-        optuna_study = self._study(given, study, objective)
+        land = self._landscape(given, study, objective)
+        optuna_study = land.build()  # every trial told its current decided value, the pending ones running
         ask = optuna_study.ask()
-        return _OptunaDraw(
-            ask, optuna_study, {"method": type(self).__name__, "optuna_trial": ask.number, "given": dict(given)}
+        entry = _Entry({}, {})
+        draw = _OptunaDraw(
+            ask, optuna_study, {"method": type(self).__name__, "optuna_trial": ask.number, "given": dict(given)}, entry
         )
+        entry.draw = draw
+        land.entries.append(entry)
+        return draw
 
     def observe(
         self, block: Block, candidate: "Candidate | None", draw: Draw | None, study: "Study", objective: int
     ) -> None:
         """Told what ``combine`` tells this objective's methods, with the constraint violations; a candidate that cannot
-        be told (none, invalid, or some case lacks a goal metric) fails its own draw and is no evidence."""
+        be told (none, invalid, or some case lacks a goal metric) fails its own draw and is no evidence. What is told
+        is told again, as decided then, before each later proposal (``_Landscape.build``)."""
         import optuna
 
         aim = study.aim(objective)  # what this copy searches for: the goal's combination, or a phase's
         if isinstance(draw, _OptunaDraw):
+            entry = draw.entry
             if candidate is None or not candidate.eligible:
                 draw.study.tell(draw.ask, state=optuna.trial.TrialState.FAIL)
-                return
-            decided, baseline = study.view(candidate), study.view(study.baseline)  # as the study decides: the model's
-            for name, violation in aim.told_constraints(study.projection, decided).items():
-                draw.ask.set_constraint(name, violation)
-            draw.study.tell(draw.ask, aim.told(study.projection, decided, objective, baseline))
+            else:
+                decided, baseline = study.view(candidate), study.view(study.baseline)  # as the study decides now
+                for name, violation in aim.told_constraints(study.projection, decided).items():
+                    draw.ask.set_constraint(name, violation)
+                draw.study.tell(draw.ask, aim.told(study.projection, decided, objective, baseline))
+            if entry is not None:  # the trial as its landscape holds it from now on
+                told = draw.study.get_trials(deepcopy=False)[draw.ask.number]
+                entry.params, entry.distributions = dict(told.params), dict(told.distributions)
+                entry.attrs = _kept(told.system_attrs)
+                entry.draw = None
+                if candidate is None or not candidate.eligible:
+                    entry.failed = True
+                else:
+                    entry.number, entry.standing = candidate.number, draw.standing
             return
         if candidate is None or not candidate.eligible:
             return
-        decided, baseline = study.view(candidate), study.view(study.baseline)
         distributions = {k: d for k, d in study.agent.distributions(candidate.params).items() if k in block.keys}
         if not distributions:
             return
-        self._study(context(block, candidate.params, study), study, objective).add_trial(
-            optuna.trial.create_trial(
-                params={k: candidate.params[k] for k in distributions},
-                distributions=distributions,
-                values=aim.told(study.projection, decided, objective, baseline),
-                constraints=aim.told_constraints(study.projection, decided) or None,
-            )
+        self._landscape(context(block, candidate.params, study), study, objective).entries.append(
+            _Entry({k: candidate.params[k] for k in distributions}, distributions, candidate.number)
         )
 
 
@@ -266,7 +384,8 @@ class TPE(Optuna):
     ``n_startup_trials`` is how many candidates a landscape holds (proposed or shared as evidence) before TPE's model is
     used; until then proposals are random. Optuna's default of 10 would make a short study random search, so the
     default here is 4. A step's proposals are made before any of them is told (``Search.width``): Optuna's constant liar
-    keeps them apart."""
+    keeps them apart (a landscape rebuilt for the next proposal holds them as running). Every trial is told the current
+    decided value of its candidate before each proposal (``Optuna``)."""
 
     def __init__(self, seed: int | None = None, n_startup_trials: int = 4, **options: Any) -> None:
         self.seed, self.n_startup_trials, self.options = seed, n_startup_trials, options

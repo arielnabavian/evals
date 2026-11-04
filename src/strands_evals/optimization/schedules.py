@@ -13,8 +13,10 @@
   Its four rules are policies, each given as an object (the defaults are the rules above):
 
   - ``allocation``: how many inner steps a round gets (``Fixed(n)``; ``inner_iterations=n`` is its shorthand);
-  - ``value``: what the outer method is told (``BestOfRound()``: the round's best candidate, as decided);
-  - ``start``: where a round opens from (``FromIncumbent()``: the enclosing incumbent);
+  - ``value``: what the outer method is told (``BestOfRound()``: the round's best candidate, as decided, asked again
+    whenever the method re-tells it);
+  - ``start``: where a round opens from (``FromIncumbent()``: the enclosing incumbent); its inner steps hold the round's
+    own incumbent, else its opener, so they always run under the round's outer values;
   - ``order``: in what order a round moves its levels (``OuterThenInner()``).
 
   Another policy (racing or halving the outer choices, values at a matched budget, warm starts, choosing the level
@@ -158,10 +160,13 @@ class RoundValue(Policy):
 
 
 class BestOfRound(RoundValue):
-    """The round's best candidate, as decided: outer choices are compared at their inner best."""
+    """The round's best candidate, as decided: outer choices are compared at their inner best. When none of the round's
+    candidates can be held (in phase B, none keeps A*'s level), the one that comes closest (``Scope.nearest``): told
+    with what it misses, so the outer method learns that the round fell short, rather than nothing."""
 
     def told(self, round: "Scope") -> "Candidate | None":
-        return round.best()
+        best = round.best()
+        return best if best is not None else round.nearest()
 
 
 class RoundStart(Policy):
@@ -317,7 +322,13 @@ class Nested(Schedule):
 
                 if not self.order.run(round_, open_, inner_):
                     return
-                round_.tell(outer, self.value.told(round_))  # None: nothing in the round stands for it, the draw failed
+
+                def standing(round_: "Scope" = round_) -> "Candidate | None":
+                    return self.value.told(round_)
+
+                # None: nothing in the round stands for it, the draw failed. The value is asked again whenever a method
+                # re-tells it (Optuna, before each proposal), so it stays the round's value as decided then.
+                round_.tell(outer, standing(), standing=standing)
             # A round that opened on a measured candidate and measured nothing new under it: rounds that keep doing
             # so have nothing left to try.
             empty = empty + 1 if len(scope.study.candidates) == measured else 0
