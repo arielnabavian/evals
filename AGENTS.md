@@ -242,7 +242,7 @@ strands-evals/
 │
 ├── tests_integ/                              # Integration tests (real providers)
 │
-├── examples/optimization/                    # Optimization examples (quickstart, poem, document reader, τ², AppWorld)
+├── examples/optimization/                    # Optimization examples (quickstart, toy, poem, document reader, τ², AppWorld, ALFWorld)
 │
 ├── pyproject.toml
 ├── README.md

@@ -15,9 +15,17 @@ command from the repository root.
 | `document_reader_workload.py` | The document-reader tools, cases and evaluator. Not a study. | |
 | `tau2_harness.py`, `tau2_workload.py` | `create_harness` as a τ²-bench agent: three search spaces by five goals, with rotation. | τ²-bench, strands-harness, Bedrock |
 | `appworld_harness.py`, `appworld_workload.py`, `appworld_setup.sh` | `create_harness` as an AppWorld code agent, and the script that sets AppWorld up. | AppWorld, strands-harness, git-lfs, Bedrock |
+| `toy_two_objectives.py` | Two objectives with closed-form answers (a choice and a number; a bump in quality, a straight-line cost), searched by the real framework with no model calls, for every goal and schedule; each shipped candidate is checked against the true answer. | nothing beyond `[optimization]` |
+| `programs_live.py` | One `ProgramProposer` call: its agent writes a `ConversationManager`, which is stored by hash, loaded under the restrictions and built into an agent. No study. | Bedrock: Claude Sonnet 5.5 |
+| `alfworld_harness.py`, `alfworld_workload.py`, `alfworld_game.py` | A small open-weight model (Qwen3.5-2B) on an OpenAI-compatible endpoint playing ALFWorld's text games: its system prompt, tool description, thinking, temperature, hints and conversation manager; `--macro` adds a program-valued macro tool written by `ProgramProposer`, `--skills` a skill library. | ALFWorld and its data, `strands-agents[openai]`, an OpenAI-compatible server such as vLLM, Bedrock for the rewriter and the proposer |
+| `alfworld_programs.py` | The ALFWorld macro: the `Macro` and `HelperMacro` interfaces a version implements, its checks, the tool that runs it, and how the proposer reads a trial. Not a study. | |
 
 Records go to `studies/` (ignored by git). Each study needs a directory of its own.
 
 Studies whose search space holds text run Reflection, whose agent has a shell over the trial transcripts, confined to
 its own folders. `BYPASS_TOOL_CONSENT=true` lets that shell run without asking: run those studies where model-written
-shell commands are acceptable, such as a VM or a container.
+shell commands are acceptable, such as a VM or a container. Studies with a `Program` (the ALFWorld macro) run
+model-written code in the study's process, under restrictions that are not a sandbox: run them there too.
+
+The ALFWorld example's model server is yours to start. Bind it to 127.0.0.1 (vLLM listens on every interface unless
+given `--host`), and reach a server on another machine through an SSH tunnel rather than a published port.
