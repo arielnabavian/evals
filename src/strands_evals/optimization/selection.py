@@ -74,7 +74,8 @@ class Selection:
     ``also``: other rules whose choice, from the same candidates, is recorded beside the selection and measured on
     the test cases too when it differs from every arm already tested (``ALSO``; they apply when a schedule anchors
     the selection, as ``PrimaryFirst`` does): ``"unmet=none"``, the selection with ``unmet="none"``; ``"unanchored"``,
-    the decision without the anchor (round 3b's rules); ``"anchor"``, the anchor itself (phase A's result)."""
+    the decision without the anchor (as a study without phases decides); ``"anchor"``, the anchor itself (phase A's
+    result)."""
 
     by: str = "model"
     rule: Mean | LowerBound = Mean()

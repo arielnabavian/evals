@@ -1,10 +1,10 @@
-"""Reward first, then cost: how a goal with a cost objective searches by default (``PrimaryFirst``, round 3d).
+"""Reward first, then cost: how a goal with a cost objective searches by default (``PrimaryFirst``).
 
 A goal says what is wanted (``Pareto(Maximize("reward"), Minimize("tokens"))``, or
 ``CheapestOnFront(Minimize("tokens"), Maximize("reward"))`` with a floor on the reward); a schedule says how the search
 gets there. Told both objectives from the first step, a search spends its budget on easy cost cuts (cheap harnesses
-that fail), and its incumbents and finalists come from there (round 3b: every cost-aware comparison failed while max
-reward won or tied). ``PrimaryFirst`` searches in two phases instead:
+that fail), and its incumbents and finalists come from there, so it can ship a cheap harness that has lost much of the
+reward a max-reward search reaches. ``PrimaryFirst`` searches in two phases instead:
 
 - **Phase A** ("primary") is a search for the primary objective alone, exactly as a max-reward study searches: its
   methods are told the primary objective, and its incumbent is the best on it. It ends when the search stops gaining
@@ -23,14 +23,15 @@ The selection is anchored too (``PrimaryFirst.decide``): the finalists are A* an
 than it; on validation, a goal with one best ships the goal's choice among those that keep A*'s level (judged as in
 phase B) and pass the seesaw guard (``Seesaw``), else the closest (usually A*); a Pareto goal keeps its validated front,
 as before, and ships one member of it, the pick: the cheapest validated candidate within the margin of the best
-validated value of the primary objective that passes the guard (round 3b's pick rule, with the guard, and with A*
-always validated). A study therefore never ships something worse than its own phase-A result by more than its margin
-(as validated). What other rules would have chosen from the same candidates is recorded (``Selection.also``).
+validated value of the primary objective that passes the guard (the cheapest-within-margin pick rule, with the
+guard, and with A* always validated). A study therefore never ships something worse than its own phase-A result by
+more than its margin (as validated). What other rules would have chosen from the same candidates is recorded
+(``Selection.also``).
 
 The primary objective is the first declared one that is not a cost; the cost, the first that is (a cost is a minimized
 usage metric, such as tokens, or a derived metric with no upper bound: ``Projection.cost_type``). A goal with no cost
-objective, or nothing but costs, searches as before. ``Search(phases=None)`` searches every goal as before round 3d (its
-methods told the goal as declared from the first step): round 3 and 3b's schedule.
+objective, or nothing but costs, searches as before. ``Search(phases=None)`` searches every goal without phases (its
+methods told the goal as declared from the first step).
 
 The record states it all: the schedule (its ``describe``), each phase's scope (``phase``), each candidate's phase, the
 ``anchor`` event (why phase A ended, after how many steps and candidates, the evidence of each of its steps, A*, and the
@@ -129,8 +130,9 @@ class Stall:
     candidate (a step of 4 equal candidates then shows a gain with probability 0.59). A round's opening proposal is a
     step of one.
     ``headroom``: the rule applies only once the incumbent is within this share of a bounded metric's range of its best
-    end (0.25: a reward of at least 0.75); below that, phase A goes on to its cap, where gains keep arriving late
-    (round 3's banking searches gained 4 to 7 points after the rule would have stopped them). None: always."""
+    end (0.25: a reward of at least 0.75); below that, phase A goes on to its cap, where gains can keep arriving late
+    (a search far from its metric's ceiling may gain several points after the rule would have stopped it). None:
+    always."""
 
     def __init__(
         self, steps: int = 2, probability: float = 0.8, per: str = "step", headroom: float | None = 0.25
@@ -162,10 +164,9 @@ class Seesaw:
     """The seesaw guard: a candidate may lose at most ``k`` of the cases its reference solves on every repetition (a
     case is lost when the candidate solves it on at most half of its own repetitions). On a validation set near its
     ceiling, a candidate can match its reference on the mean while trading cases the reference solves every time for
-    others (round 3b's C6: 95.3 against 97.1 on validation, 73.2 against 82.2 on test). Solving is reaching the best
-    end of the metric's range, so the guard needs a bounded primary metric (it passes everything otherwise). Round 3's
-    records support k = 1: a configuration measured twice on the same validation cases loses 0 or 1 such cases against
-    itself (a replay of those records)."""
+    others, and then fall well behind it on test. Solving is reaching the best end of the metric's range, so the guard
+    needs a bounded primary metric (it passes everything otherwise). k = 1 allows for noise: a configuration measured
+    twice on the same validation cases typically loses 0 or 1 such cases against itself."""
 
     def __init__(self, k: int = 1) -> None:
         if k < 0:
@@ -479,8 +480,8 @@ class PrimaryFirst(Schedule):
     ``margin``: phase B's non-inferiority margin on the primary objective, in its units (None: 0.02 of a bounded
     metric's range for a goal with no constraint on the primary metric, none for a goal with one, whose constraint is
     judged against A* instead). ``confidence``: the probability non-inferiority needs (None: the selection's
-    feasibility). ``pick``: what a Pareto goal's pick asks of "within the margin": None (default), the decided values,
-    as round 3b's pick rule did; a probability, the paired evidence at that probability. ``guard``: the seesaw guard on
+    feasibility). ``pick``: what a Pareto goal's pick asks of "within the margin": None (default), the decided values;
+    a probability, the paired evidence at that probability. ``guard``: the seesaw guard on
     validation (``Seesaw(1)`` by default; None: none).
     ``primary``, ``cost``: the objectives' metrics, when not the rule's (``Projection.primary_and_cost``)."""
 
@@ -739,15 +740,15 @@ class PrimaryFirst(Schedule):
         return pick, ref.number
 
     def _unanchored(self, study: "Study", views: list["View"], baseline: "View") -> list[int]:
-        """What round 3b's rules would ship from the same candidates: the goal's own selection without the anchor
+        """What the unanchored rules would ship from the same candidates: the goal's own selection without the anchor
         (constraints judged as the model decides them, no guard, nothing when none meets them); a Pareto goal's pick
-        by round 3b's rule (within the margin of the best by decided values, the baseline a member only when it was a
-        finalist; no guard)."""
+        by the cheapest-within-margin rule (within the margin of the best by decided values, the baseline a member only
+        when it was a finalist; no guard)."""
         p = study.projection
         if study.combine.best_is_set(len(p.objectives)):
             finalists = set(study._finalist_numbers)
             members = {v.number for v in views if v.number != study.baseline.number or v.number in finalists}
-            saved, self.pick = self.pick, None  # round 3b's rule decides by the decided values
+            saved, self.pick = self.pick, None  # the unanchored rule decides by the decided values
             try:
                 pick, _ = self._pick_of(study, views, guard=False, members=members)
             finally:

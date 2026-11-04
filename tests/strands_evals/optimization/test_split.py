@@ -422,7 +422,7 @@ def test_the_runs_divide_max_concurrency_among_those_still_searching(monkeypatch
     assert running["most"] <= 8
 
 
-# ---- the cost goal with a floor: finalists from the front (round 3b, F4) ---------------------------------------------
+# ---- the cost goal with a floor: finalists from the front ------------------------------------------------------------
 class Long(Evaluator):
     """How long the output is, to 10 words: 0.1 a word."""
 
@@ -498,7 +498,7 @@ def test_a_cost_goal_with_a_floor_validates_front_members_and_holds_its_incumben
     assert (combine["kind"], combine["within"], combine["told"]) == ("CheapestOnFront", 0.25, [["words"]])
     assert [o["kind"] for o in head["objectives"]] == ["Minimize", "Maximize"]
 
-    cheapest = study(Minimize("words"))  # round 3's cost goal: the 3 cheapest feasible, the cheapest selected
+    cheapest = study(Minimize("words"))  # the plain cost goal: the 3 cheapest feasible, the cheapest selected
     result = cheapest.optimize(iterations=6)
     by_n = {c.params["n"]: c.number for c in cheapest.candidates}
     assert [c.number for c in cheapest.validated] == [0, by_n[5], by_n[6], by_n[7]]

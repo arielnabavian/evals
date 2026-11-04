@@ -28,9 +28,9 @@ baseline on --test (test_normal's 168 by default, or test_challenge's 417), whic
 --repetitions times, until the best has not changed for --patience iterations (at most --iterations). The goals are
 tau2_harness.py's (floor's --floor is absolute, judged on train and dev, whose rewards run higher than test_challenge's;
 --floor-gain is a gain over the baseline on the same tasks instead), and so is what a run ships when nothing meets a
-goal's limit on dev: the closest, unconfirmed, or with ``--unmet none`` nothing (the baseline, as round 3 and 3b).
-The goals with a cost objective (joint, floor) search reward first, then cost (--schedule reward-first, round 3d's
-default), as tau2_harness.py describes; --schedule joint is round 3 and 3b's.
+goal's limit on dev: the closest, unconfirmed, or with ``--unmet none`` nothing (the baseline).
+The goals with a cost objective (joint, floor) search reward first, then cost (--schedule reward-first, the
+default), as tau2_harness.py describes; --schedule joint tells every step both objectives.
 """
 
 from __future__ import annotations
@@ -103,9 +103,9 @@ def patient() -> ModelRetryStrategy:
 
 # A thinking block is bound to the conversation before it. When a context strategy later drops or cuts an earlier
 # message (the full space's drop_stale), Bedrock may reject the next call ("Invalid `signature` in `thinking` block. The
-# block is bound to a different conversation"; round 3 saw it in one account) and the trial ends as the agent's
-# failure. A mismatched block is dropped instead (Anthropic's own setting for it, behind its beta header, as
-# tau2_harness.py and loca_workload.py do): a call whose prefix is unchanged is sent and answered as before.
+# block is bound to a different conversation") and the trial ends as the agent's failure. A mismatched block is
+# dropped instead (Anthropic's own setting for it, behind its beta header, as tau2_harness.py does): a call whose
+# prefix is unchanged is sent and answered as before.
 BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
 BINDING_BETA = "thinking-binding-controls-2026-08-01"
 
@@ -350,11 +350,11 @@ def capped(factory: Any, max_effort: str | None) -> Any:
 
 GOALS = ("best", "budget", "cheapest", "joint", "floor")
 FEASIBILITY = 0.8  # the probability with which a goal's limit must hold
-# How a goal with a cost objective (joint, floor) searches: reward first, then cost (PrimaryFirst, round 3d's default),
-# or every step told both objectives (round 3 and 3b's: "joint").
+# How a goal with a cost objective (joint, floor) searches: reward first, then cost (PrimaryFirst, the default), or
+# every step told both objectives ("joint").
 SCHEDULES = ("reward-first", "joint")
 COST_GOALS = ("joint", "floor")
-ALSO_DEFAULT = ",".join(ALSO)  # recorded (and tested where they differ): unmet=none, unanchored (round 3b's), anchor
+ALSO_DEFAULT = ",".join(ALSO)  # recorded (and tested where they differ): unmet=none, unanchored, anchor
 
 
 def phases(goal: str, schedule: str, margin: float | None, guard: int | None, cap: float) -> Any:
@@ -518,13 +518,13 @@ if __name__ == "__main__":
         "--unmet",
         choices=UNMET,
         default=Selection().unmet,
-        help="when nothing meets the limit: ship the closest, unconfirmed, or none (the baseline, as round 3)",
+        help="when nothing meets the limit: ship the closest, unconfirmed, or none (the baseline)",
     )
     parser.add_argument(
         "--schedule",
         choices=SCHEDULES,
         default=SCHEDULES[0],
-        help="joint, floor: reward first, then cost (round 3d), or both from the first step (round 3 and 3b)",
+        help="joint, floor: reward first, then cost (the default), or both from the first step",
     )
     parser.add_argument(
         "--margin", type=float, default=None, help="reward-first: phase B's non-inferiority margin in reward (0.02)"

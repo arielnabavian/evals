@@ -34,9 +34,9 @@ included):
     floor     the fewest weighted tokens with a reward of at least --floor (absolute), taken from the feasible front of
               (reward, weighted tokens): within 5% of the cheapest front member's tokens counts as a tie, and the tie
               goes to the higher reward; the finalists are front members and the incumbent is held on the front
-              (``CheapestOnFront``, round 3b's F4)
+              (``CheapestOnFront``)
 
-The goals with a cost objective (joint, floor) search reward first, then cost (--schedule reward-first, round 3d's
+The goals with a cost objective (joint, floor) search reward first, then cost (--schedule reward-first, the
 default; ``PrimaryFirst``): phase A is a max-reward search until it stops gaining (2 steps in a row with no candidate
 beating its incumbent with probability 0.8, paired over the train tasks, once the reward is within 0.25 of 1) or until
 a floor is met with confidence, at most --phase-cap of the steps; phase B spends the rest lowering the weighted tokens
@@ -44,13 +44,13 @@ from phase A's result, A*, keeping its reward (paired over the same tasks: withi
 floor).
 The selection is A* or a cheaper candidate that keeps its reward on validation and passes the seesaw guard (--guard: it
 loses at most k of the tasks A* solves on every repetition); for joint, the validated front is tested as before, with
-the pick among it. --also: what other rules would ship (the old fallback, round 3b's rules, A* itself), recorded and
-tested where they differ. --schedule joint: every step told both objectives, as in round 3 and 3b.
+the pick among it. --also: what other rules would ship (unmet=none, the unanchored rules, A* itself), recorded and
+tested where they differ. --schedule joint: every step told both objectives.
 
 Every decision is made with the study's model of each goal metric; a limit must hold with probability 0.8. When no
 finalist (nor the baseline) meets it on validation, the run ships the one closest to meeting it (the highest
 probability, then the least shortfall, then the goal's own order), marked unconfirmed in the record and the result;
-``--unmet none`` ships nothing instead (the baseline, as round 3 and 3b did). The domain's
+``--unmet none`` ships nothing instead (the baseline). The domain's
 tasks (all of τ²'s, the train and test tasks together) are dealt by --split into shares: the search runs on the train
 share, each case --repetitions times, until its best has not changed for --patience iterations (at most --iterations);
 the finalists and the baseline are measured on the validation share, and the selection is made there; last, the
@@ -185,9 +185,9 @@ ADAPTIVE_MAX_TOKENS = 32768  # Bedrock reserves max_tokens of quota per request;
 # A thinking block is bound to the conversation before it. When an earlier message changes after the block was written
 # (a context strategy drops or cuts an earlier tool result; a reasoning block is taken off the end of a turn), Bedrock
 # may reject the next call ("Invalid `signature` in `thinking` block. The block is bound to a different conversation"),
-# and the trial ends as the agent's failure: in round 3, 0.2-2.7% of the trials of every τ² study in one account, and
-# none in the others. A mismatched block is dropped instead (Anthropic's own setting for it, behind its beta header, as
-# loca_workload.py does): a call whose prefix is unchanged is sent and answered as before.
+# and the trial ends as the agent's failure (in our τ² studies, up to a few percent of a study's trials). A mismatched
+# block is dropped instead (Anthropic's own setting for it, behind its beta header): a call whose prefix is unchanged
+# is sent and answered as before.
 BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
 BINDING_BETA = "thinking-binding-controls-2026-08-01"
 
@@ -206,9 +206,9 @@ def bound(model: Any) -> Any:
 
 # create_harness's effort "off" sends no thinking field, and Haiku 5.5 on Bedrock thinks when the field is absent (its
 # default: adaptive, the block's text omitted, the block signed). So "off" thought, and its signed blocks went without
-# the binding control (``bound`` binds an adaptive request): in round 3, 41 trials of thinking-"off" candidates were
-# refused in one account, and in every account "off" was the model's default thinking. Off is sent as off instead: a
-# model that does not think writes no block to bind. (Bedrock takes no block_binding with it:
+# the binding control (``bound`` binds an adaptive request): trials of thinking-"off" candidates could be refused, and
+# "off" was the model's default thinking. Off is sent as off instead: a model that does not think writes no block to
+# bind. (Bedrock takes no block_binding with it:
 # "thinking.disabled.block_binding: Extra inputs are not permitted".)
 DISABLED = {"type": "disabled"}
 
@@ -455,11 +455,11 @@ def capped(factory: Any, max_effort: str | None) -> Any:
 
 GOALS = ("best", "budget", "cheapest", "joint", "floor")
 FEASIBILITY = 0.8  # the probability with which a goal's limit must hold
-# How a goal with a cost objective (joint, floor) searches: reward first, then cost (PrimaryFirst, round 3d's default),
-# or every step told both objectives (round 3 and 3b's: "joint").
+# How a goal with a cost objective (joint, floor) searches: reward first, then cost (PrimaryFirst, the default), or
+# every step told both objectives ("joint").
 SCHEDULES = ("reward-first", "joint")
 COST_GOALS = ("joint", "floor")
-ALSO_DEFAULT = ",".join(ALSO)  # recorded (and tested where they differ): unmet=none, unanchored (round 3b's), anchor
+ALSO_DEFAULT = ",".join(ALSO)  # recorded (and tested where they differ): unmet=none, unanchored, anchor
 
 
 def phases(goal: str, schedule: str, margin: float | None, guard: int | None, cap: float) -> Any:
@@ -587,13 +587,13 @@ if __name__ == "__main__":
         "--unmet",
         choices=UNMET,
         default=Selection().unmet,
-        help="when nothing meets the limit: ship the closest, unconfirmed, or none (the baseline, as round 3)",
+        help="when nothing meets the limit: ship the closest, unconfirmed, or none (the baseline)",
     )
     parser.add_argument(
         "--schedule",
         choices=SCHEDULES,
         default=SCHEDULES[0],
-        help="joint, floor: reward first, then cost (round 3d), or both from the first step (round 3 and 3b)",
+        help="joint, floor: reward first, then cost (the default), or both from the first step",
     )
     parser.add_argument(
         "--margin", type=float, default=None, help="reward-first: phase B's non-inferiority margin in reward (0.02)"

@@ -72,7 +72,7 @@ def test_each_step_adds_one_idea(tmp_path):
     assert set(built[2].params) == set(built[1].params) | {"pin_first"}
     assert set(built[6].params) - set(built[5].params) == {"tools.open_document", "tools.read_page"}
     assert set(built[7].params) == set(built[2].params) and set(built[8].params) == set(built[4].params)
-    # a goal with a cost objective (answer and tokens) searches the answer first, then the tokens (round 3d): its
+    # a goal with a cost objective (answer and tokens) searches the answer first, then the tokens: its
     # schedule is PrimaryFirst around the one it ran before
     kinds = [type(s.schedule).__name__ for s in built.values()]
     assert kinds == ["Joint", "PrimaryFirst", "Joint", "PrimaryFirst", "PrimaryFirst", "PrimaryFirst", "Joint", "Joint"]

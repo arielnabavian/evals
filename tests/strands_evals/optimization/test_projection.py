@@ -223,7 +223,7 @@ def test_a_combination_holds_its_objectives_and_a_single_objective_needs_none():
         Pareto(AtMost("tokens", 5))
 
 
-# ---- the cost goal with a floor: the cheapest on the feasible front (round 3b, F4) -----------------------------------
+# ---- the cost goal with a floor: the cheapest on the feasible front --------------------------------------------------
 def floored(*rows):
     """Candidates of (Words, Score): Words is the cost (unbounded), Score the value, at least 0.5."""
     p = projection([Minimize("Words"), Maximize("Score")], [AtLeast("Score", 0.5)])
@@ -238,7 +238,7 @@ def test_the_cheapest_on_the_front_breaks_a_near_tie_in_cost_by_the_value():
     assert goal.held(p, c, None, c[0]).number == 2 and [t.number for t in goal.best(p, c, c[0])] == [2]
     assert goal.told(p, c[2], None, c[0]) == [83.0] and goal.directions(p, None) == ["minimize"]
     assert CheapestOnFront(*p.objectives, within=0.0).held(p, c, None, c[0]).number == 1  # no tolerance: the cheapest
-    old = projection([Minimize("Words")], [AtLeast("Score", 0.5)])  # round 3's cost goal: the cheapest feasible
+    old = projection([Minimize("Words")], [AtLeast("Score", 0.5)])  # the plain cost goal: the cheapest feasible
     oc = [candidate(old, t.number, [(a.case, a.status, a.metrics) for a in t.trials]) for t in c]
     assert Pareto(*old.objectives).held(old, oc, None, oc[0]).number == 1
     # while nothing meets the floor, the candidates that miss it least stand in: the incumbent climbs toward it

@@ -651,9 +651,6 @@ RRSI at matched budgets, every number on held-out test cases with 90% intervals 
 - There is no command line or YAML yet; the Python API is the only surface.
 - BayesBench is not public yet (see [Installing](#installing)).
 
-The module's docstrings mention experiment rounds ("round 3b", "round 3d"); those name the experiments that motivated a
-change. Round 3d is the reward-first schedule.
-
 ## Extending it
 
 ### A new method

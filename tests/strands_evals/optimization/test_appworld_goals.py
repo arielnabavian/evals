@@ -1,4 +1,4 @@
-"""examples/optimization/appworld_harness.py's goals (round 3b): the floor goal's absolute floor, or gain over the
+"""examples/optimization/appworld_harness.py's goals: the floor goal's absolute floor, or gain over the
 baseline."""
 
 import sys
@@ -22,7 +22,7 @@ def test_the_floor_goal_takes_an_absolute_floor_or_a_gain_over_the_baseline():
     for wrong in ({}, {"floor": 0.95, "floor_gain": 0.072}):
         with pytest.raises(ValueError, match="one of them"):
             ah.goals("floor", **wrong)
-    assert ah.goals("cheapest")["constraints"] == [AtLeast("reward", -0.05, compare="difference")]  # round 3's
+    assert ah.goals("cheapest")["constraints"] == [AtLeast("reward", -0.05, compare="difference")]
 
 
 def test_the_cost_goals_search_reward_first_unless_the_schedule_is_joint():
@@ -32,7 +32,7 @@ def test_the_cost_goals_search_reward_first_unless_the_schedule_is_joint():
     assert isinstance(phased, PrimaryFirst) and phased.margin == 0.02 and phased.guard.k == 1 and phased.cap == 2 / 3
     assert isinstance(ah.phases("floor", "reward-first", None, None, 0.5), PrimaryFirst)
     assert ah.phases("floor", "reward-first", None, None, 0.5).guard is None  # --guard -1: no guard
-    assert ah.phases("joint", "joint", 0.02, 1, 2 / 3) is None  # round 3 and 3b's schedule
+    assert ah.phases("joint", "joint", 0.02, 1, 2 / 3) is None  # no phases: both objectives from the first step
     assert ah.phases("best", "reward-first", 0.02, 1, 2 / 3) is None  # max reward: no phases
     with pytest.raises(ValueError, match="--schedule"):
         ah.phases("joint", "together", 0.02, 1, 2 / 3)

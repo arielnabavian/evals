@@ -1,4 +1,4 @@
-"""Reward first, then cost (``PrimaryFirst``, round 3d): the default schedule of a goal with a cost objective.
+"""Reward first, then cost (``PrimaryFirst``): the default schedule of a goal with a cost objective.
 
 Scripted studies (no network): the agent's reply says which cases it solves and how many words it writes, so each
 candidate's reward on every case and its output tokens (two per word) are known in advance."""

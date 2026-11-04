@@ -13,7 +13,7 @@ block moves, and how often a proposal that repeats a measured candidate is made 
 
 Without blocks, every variable is in a default block for its type; without a schedule, the study builds rounds over
 the structural blocks around a search of the rest (``default_schedule``), which moves one block at a time
-(``within=Alternate()``, the default) or every block in every step (``within=Joint()``, as before round 3b).
+(``within=Alternate()``, the default) or every block in every step (``within=Joint()``).
 
 **Width and depth.** A search runs in steps, one after another: each step's proposals are made from the candidates the
 steps before it measured, so the number of steps (``optimize(iterations=...)``) is the search's depth, and its wall time
@@ -24,13 +24,13 @@ way. In the τ² telecom records, a step of width 4 found about as much as 2 to 
 to 3.5: wider steps buy wall time with trials (about 1.5 to 2.5 times as many for the same gain), and gain less past
 about 8. ``width=1`` proposes one candidate at a time.
 
-**Phases (round 3d).** A goal with a cost objective (a primary objective, such as reward, and a cost, such as tokens:
+**Phases.** A goal with a cost objective (a primary objective, such as reward, and a cost, such as tokens:
 ``Pareto(Maximize(...), Minimize(...))``, ``CheapestOnFront(...)``) searches reward first, then cost
 (``phases.PrimaryFirst``): phase A searches the primary objective alone, as a max-reward study does, until it stops
 gaining; phase B lowers the cost from phase A's result under paired non-inferiority to it, in the same budget.
 ``phases="auto"`` (default) does so whenever the goal has both and the search gives no schedule of its own;
 ``phases=PrimaryFirst(...)`` with its settings, around the schedule given or built; ``phases=None`` never: every step's
-methods are told the goal as declared, round 3 and 3b's schedule.
+methods are told the goal as declared.
 """
 
 from __future__ import annotations
@@ -57,10 +57,10 @@ class Search:
         same incumbent and measures together (see the module's docstring); a round's opening proposal (``Nested``),
         which sets the structure its inner steps search under, is always one. ``within``: what the default schedule
         runs inside its rounds over the structural blocks (``Alternate()`` when omitted: one block a step, in turn, so a
-        text rewrite and a draw of the numbers are measured apart; ``Joint()``: every block every step, round 3's);
+        text rewrite and a draw of the numbers are measured apart; ``Joint()``: every block every step);
         unused with a ``schedule`` of one's own, or with no structural block (then every step is ``Joint()``).
         ``phases``: how a goal with a cost objective searches (see the module's docstring): ``"auto"``, a
-        ``PrimaryFirst(...)``, or None (round 3 and 3b's schedule)."""
+        ``PrimaryFirst(...)``, or None (no phases)."""
         if redraws < 0:
             raise ValueError("redraws must be at least 0")
         if width < 1:

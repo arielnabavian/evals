@@ -47,7 +47,7 @@ Events (``format: strands_evals.optimization``, schema 3):
 - ``finished`` (the run ended, with ``best``, ``unconfirmed`` and its ``reason``: ``candidates``, ``patience``, or
   ``exhausted``: its schedule had nothing new to propose) or ``stopped`` (it raised, with ``error``). ``test.jsonl``'s
   ``tested`` arms carry ``unconfirmed`` too.
-- Phases (``phases.PrimaryFirst``, round 3d): the header's ``aims`` (what each method copy searches for) and
+- Phases (``phases.PrimaryFirst``): the header's ``aims`` (what each method copy searches for) and
   ``schedule`` (kind ``PrimaryFirst``, with its settings, and a child per phase); each phase's ``scope`` with its
   ``phase``; each candidate's ``phase`` and ``aim`` (the copy that proposed it) and, once there is an anchor,
   ``anchored`` (its paired evidence against A*); ``anchor``, when phase A ends: A*, why and after how many steps and

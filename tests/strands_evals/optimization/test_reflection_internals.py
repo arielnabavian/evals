@@ -256,7 +256,7 @@ class TestAgenticOptimizer:
             opt._sample_traces()
 
     def test_trace_files_carry_both_shapes(self):
-        opt = PickBest(TextValues(), digest=False)  # round 3's traces: the messages under both shapes, no digest
+        opt = PickBest(TextValues(), digest=False)  # the older traces: the messages under both shapes, no digest
         opt.add_rollouts(
             [
                 Rollout(
@@ -288,7 +288,7 @@ class TestAgenticOptimizer:
         assert not os.path.exists(folder)
 
     def test_with_the_digest_each_trace_holds_its_messages_once_and_how_it_ended(self):
-        opt = PickBest(TextValues())  # the digest is the default (round 3b)
+        opt = PickBest(TextValues())  # the digest is the default
         messages = [{"role": "user", "content": [{"text": "q"}]}, {"role": "assistant", "content": [{"toolUse": {}}]}]
         opt.add_rollouts(
             [
@@ -554,7 +554,7 @@ class TestContrastiveReflection:
         assert opt.last_metrics["tool_calls"] == {"shell": 2 + 2 * 5}
 
     def test_a_value_still_over_its_limit_after_the_retries_is_returned_for_the_caller_to_drop(self):
-        for retries, calls in ((2, 2), (0, 0)):  # 0: round 3's, never sent back
+        for retries, calls in ((2, 2), (0, 0)):  # 0: never sent back
             values = TextValues(system_prompt="original")
             opt = make_reflection(values, limits={"system_prompt": 10}, over_limit_retries=retries)
             feed(opt)

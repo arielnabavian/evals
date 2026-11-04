@@ -23,7 +23,7 @@ DOCS = {
     "cards": "Credit card rewards. Card replacement: order_replacement_credit_card_7291. CREDIT limits.",
     "empty": "",
     "accounts": "Silver Account, Platinum Account, Diamond Elite Account, Silver Plus Account.",
-    # the document the round-3 study froze on starts with prose like this (2026-10-25)
+    # a document a study froze on starts with prose like this
     "flow": "## Overview of Data Flow\n- Transaction categorization: Card purchases are automatically classified by "
     "merchant category and the rewards engine applies the matching earn rate to every eligible purchase.\n" * 3,
 }
@@ -77,7 +77,7 @@ def test_a_runaway_pattern_ends_with_the_tools_error(monkeypatch):
 
 
 def test_the_frozen_pattern_finishes():
-    """The pattern that froze a round-3 study: the guard answers at once, with τ²'s result on the documents re can
+    """A pattern that froze a study: the guard answers at once, with τ²'s result on the documents re can
     finish (re never finishes "flow", which has no match; "cards" has a 34-character word: slow for re)."""
     retriever = GrepRetriever()
     started = time.monotonic()

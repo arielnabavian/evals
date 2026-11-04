@@ -231,8 +231,8 @@ class Nested(Schedule):
         ``opener``: what a round's opening proposal (one candidate) costs the budget around the round. ``"candidate"``
         (default): one candidate's worth, 1 / ``Search.width`` of a step, so a run measures ``width`` x ``iterations``
         candidates whatever its rounds (its last step may be narrower), and an opener that repeats a measured candidate
-        costs nothing. ``"step"``: a whole step, as before round 3b (at width 4 and 12 iterations of rounds of 1 + 4
-        steps, a run measured 39 candidates, not 48)."""
+        costs nothing. ``"step"``: a whole step (at width 4 and 12 iterations of rounds of 1 + 4 steps, a run
+        then measures 39 candidates, not 48)."""
         if inner_iterations is not None and allocation is not None:
             raise ValueError(
                 "give Nested inner_iterations=n or allocation=..., not both (inner_iterations=n is Fixed(n))"

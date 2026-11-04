@@ -1,4 +1,4 @@
-"""What a run ships when nothing meets the constraints (``Selection(unmet=...)``, round 3c): the closest, unconfirmed,
+"""What a run ships when nothing meets the constraints (``Selection(unmet=...)``): the closest, unconfirmed,
 or nothing."""
 
 import json
@@ -62,7 +62,7 @@ def view(p, number, metrics, p_met=()):
 
 
 def test_the_closest_is_the_highest_probability_of_meeting_every_constraint():
-    # round 3b's C3, fold 4: the finalists validated at 0.954-0.975 against a 0.95 floor, with P(met) 0.56-0.75
+    # finalists that validated at 0.954-0.975 against a 0.95 floor, with P(met) 0.56-0.75
     p = projection([Minimize("Words"), Maximize("Score")], [AtLeast("Score", 0.95)])
     views = [
         view(p, 0, {"Words": 40, "Score": 0.24}, [0.0]),  # the baseline
@@ -145,7 +145,7 @@ def test_the_setting():
 class Shifted(Evaluator):
     """How long the output is, to 10 words (0.1 a word), plus ``bonus`` on the cases whose names start with ``on`` (by
     default the search cases, t...) and ``noise`` (seeded by the trial): the finalists meet a floor on the search cases
-    and miss it on validation, as round 3b's C3 fold 4 did."""
+    and miss it on validation."""
 
     score_range = (0, 1)
 

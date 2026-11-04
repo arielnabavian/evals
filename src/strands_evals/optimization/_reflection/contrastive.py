@@ -22,8 +22,8 @@ from .templates import Renderable, create_template
 
 logger = logging.getLogger(__name__)
 
-# What the agent is told when a value it submitted is over its limit (round 3b, F6): in the same conversation, so it
-# shortens what it wrote rather than starting again.
+# What the agent is told when a value it submitted is over its limit: in the same conversation, so it shortens what
+# it wrote rather than starting again.
 OVER_LIMIT = (
     "{what} over {whose} limit: {details}. A value over its limit is discarded and the current value kept. Shorten "
     "{it} to fit, keeping what matters most (check each file with `wc -c`), write {it} to {its} file in your working "
@@ -227,7 +227,7 @@ class ContrastiveReflection(AgenticOptimizer):
             "traces_folder": os.path.abspath(traces_folder),
             "work_folder": self._work_folder(),
             "params": params,
-            "digest_file": self.digest_file,  # every trace's digest (round 3b), or None
+            "digest_file": self.digest_file,  # every trace's digest, or None
         }
 
         system_prompt = self._system_prompt_template.render(**template_vars)

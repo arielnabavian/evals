@@ -86,7 +86,7 @@ def outside(command: str, roots: Sequence[str], cwd: str) -> list[str]:
     return sorted(set(found))
 
 
-# ---- the digest of every trace (round 3b, F5) ------------------------------------------------------------------------
+# ---- the digest of every trace ---------------------------------------------------------------------------------------
 DIGEST_CHARS = 20000  # about 5k tokens: the agent reads it once instead of opening traces to learn how each one went
 
 
@@ -344,7 +344,7 @@ class AgenticOptimizer(ABC):
                 how the conversation ended (``output``), and a digest of every
                 trace (``DIGEST.md`` in the traces folder): every case with a
                 conversation that did not succeed, how each ended, and the
-                evaluators' reasons. False: round 3's traces (the messages twice,
+                evaluators' reasons. False: the older trace format (the messages twice,
                 under ``data`` and ``response``; how it ended left out).
             digest_chars: The digest's length limit, in characters (its fields
                 are cut to fit; every case that did not succeed is listed).
@@ -724,7 +724,7 @@ class AgenticOptimizer(ABC):
         of the step; a prompt silently analyzing nothing costs a whole optimizer
         run.
 
-        With ``digest`` (the default since round 3b), a file holds its messages
+        With ``digest`` (the default), a file holds its messages
         once, in the second shape (``response.messages``, which skill curation's
         template reads), with ``output`` (how the conversation ended) and the task,
         and ``DIGEST.md`` beside the files lists every trace (``digest_text``), so

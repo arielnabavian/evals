@@ -255,7 +255,7 @@ def test_each_level_of_structure_can_be_its_own_block():
     assert study.structural_order() == ["structure", "style"]
     schedule = study.schedule  # the default: rounds per level of structure, around everything else
     levels = (study.name_of(schedule.outer), study.name_of(schedule.inner.outer), type(schedule.inner.inner))
-    assert levels == ("structure", "style", Alternate)  # one block a step inside the rounds (round 3b; Joint before)
+    assert levels == ("structure", "style", Alternate)  # one block a step inside the rounds (not Joint)
 
 
 def test_a_block_holds_declared_objects_and_a_component_stands_for_the_variables_in_it():
@@ -534,7 +534,7 @@ def test_patience_waits_while_a_run_closes_in_on_its_limits(unmet):
     )
     study.optimize(iterations=19, patience=2)
     assert [c.params["stanzas"] for c in study.candidates] == [2, 3, 5, 6, 1, 4]  # stopped 2 after the closest miss
-    if unmet == "none":  # as before round 3c: nothing ships
+    if unmet == "none":  # nothing ships
         assert study.best_candidates == [] and study.unconfirmed is None
     else:  # the closest miss ships, unconfirmed
         assert [c.params["stanzas"] for c in study.best_candidates] == [6] and study.unconfirmed is not None
@@ -594,7 +594,7 @@ def test_a_step_that_repeats_proposes_again():
     assert order.told == [0, 1]  # the repeated draw learned the baseline's result; the next draw, its own
 
 
-# ---- what a round's opener costs (round 3b, F1) ----------------------------------------------------------------------
+# ---- what a round's opener costs -------------------------------------------------------------------------------------
 # three rounds, each opening on a structure not measured before (the third: the summary with the detailed style)
 ROUNDS = ({"manager": "summary"}, {"manager": "window"}, {"manager": "summary", "manager.summary.style": "detailed"})
 
@@ -618,7 +618,7 @@ def wide(schedule, *, width=4, structure=None, record=None):
 
 
 def test_an_opener_costs_one_candidate_so_rounds_do_not_shrink_the_run(tmp_path):
-    # rounds of 1 + 4 steps at width 4, 12 steps: openers that cost a step left round 3's full space 39 candidates
+    # rounds of 1 + 4 steps at width 4, 12 steps: openers that cost a step leave a full space 39 candidates
     rounds = lambda b: Nested(outer=b.structure, inner=Joint(), inner_iterations=4)  # noqa: E731
     study = wide(rounds, structure=Choose(*ROUNDS), record=tmp_path)
     study.optimize(iterations=12)
@@ -637,7 +637,7 @@ def test_an_opener_costs_one_candidate_so_rounds_do_not_shrink_the_run(tmp_path)
         structure=Choose(*ROUNDS),
     )
     old.optimize(iterations=12)
-    assert len(old.candidates) - 1 == 1 + 16 + 1 + 16 + 1 + 4  # an opener cost a whole step: round 3's 39
+    assert len(old.candidates) - 1 == 1 + 16 + 1 + 16 + 1 + 4  # an opener costs a whole step: 39
 
 
 def test_an_opener_that_repeats_a_measured_candidate_costs_nothing(tmp_path):
@@ -664,7 +664,7 @@ def test_at_width_one_an_opener_costs_a_step_as_before():
         Nested(outer=Block(TPE(), MANAGER), opener="free")
 
 
-# ---- the default structure block's startup (round 3b, F2) ------------------------------------------------------------
+# ---- the default structure block's startup ---------------------------------------------------------------------------
 def test_the_default_structure_block_leaves_startup_after_the_baseline_and_one_round(tmp_path):
     study = Study(
         agent=create_managed,
@@ -684,12 +684,12 @@ def test_the_default_structure_block_leaves_startup_after_the_baseline_and_one_r
     rounds = [e for e in log if e["type"] == "scope" and e["outer"] == "structure"]
     told = [t for t in outer.trials if t.state.name == "COMPLETE"]
     # the baseline's evidence (trial 0), then one per round, told as it ends: from the second round on, a round asks
-    # with 2 trials complete, the startup's, so TPE's model chooses its structure (round 3's startup of 4: none did)
+    # with 2 trials complete, the startup's, so TPE's model chooses its structure (with a startup of 4, none would)
     assert len(rounds) >= 3 and [t.number for t in told] == list(range(1 + len(rounds)))
     assert log[0]["blocks"]["structure"]["method"]["n_startup_trials"] == 2
 
 
-# ---- inside the default schedule's rounds: one block a step (round 3b, F3) -------------------------------------------
+# ---- inside the default schedule's rounds: one block a step ----------------------------------------------------------
 def test_the_default_rounds_move_one_block_a_step_unless_search_says_joint(tmp_path):
     def study(**search):
         return Study(

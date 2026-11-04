@@ -63,10 +63,10 @@ logger.add(sys.stderr, level="ERROR")
 
 # τ²'s simulated user: the same for every candidate, so only the agent varies (τ²'s leaderboard uses gpt-4.1).
 USER_LLM = "bedrock/us.anthropic.claude-sonnet-4-6"
-# The simulated user's and the judge's sampling temperature: 0 (rounds 2, 3 and 3b, Sonnet 4.6) unless the environment
-# says otherwise. Sonnet 5.5 refuses any temperature ("`temperature` is deprecated for this model"), so a study whose
-# user is Sonnet 5.5 sets TAU2_USER_TEMPERATURE=none: no temperature is sent and the model samples as it does by
-# default (round 3d). The judge (banking's one natural-language assertion, retail's) follows the user's setting unless
+# The simulated user's and the judge's sampling temperature: 0 (for the default user, Sonnet 4.6) unless the
+# environment says otherwise. Sonnet 5.5 refuses any temperature ("`temperature` is deprecated for this model"), so a
+# study whose user is Sonnet 5.5 sets TAU2_USER_TEMPERATURE=none: no temperature is sent and the model samples as it
+# does by default. The judge (banking's one natural-language assertion, retail's) follows the user's setting unless
 # TAU2_JUDGE_TEMPERATURE is given.
 USER_TEMPERATURE = os.environ.get("TAU2_USER_TEMPERATURE", "0")
 JUDGE_TEMPERATURE = os.environ.get("TAU2_JUDGE_TEMPERATURE", USER_TEMPERATURE)
@@ -107,12 +107,12 @@ NUDGE = "(Your last turn contained no message. Reply to the customer or call a t
 
 # τ³ banking's grep tool matches the agent's pattern against every document of the knowledge base with re, whose
 # matcher backtracks without limit and never releases the GIL. A pattern such as `(\w+ ?)*Account.*...` never finishes
-# on a 1,246-character document, and every thread of the study waits behind it: a round-3 study froze for 7 hours
-# (2026-10-25). So the same search runs on the regex module in its VERSION0 mode (re's syntax and matching), which
-# releases the GIL while it matches and gives up after GREP_SECONDS: the agent then gets the tool's error. The pattern
-# is compiled as τ²'s does it (re, a pattern re rejects searched as literal text), and the documents, scores and order
-# are τ²'s. On 21,769 distinct patterns agents gave the tool in round 3 (109k of 255k calls), every document's score was
-# the same as re's; re took at most 1.7 s on any of them (median 14 ms), so 30 s ends only a runaway.
+# on a 1,246-character document, and every thread of the study waits behind it: a study can freeze for hours. So the
+# same search runs on the regex module in its VERSION0 mode (re's syntax and matching), which releases the GIL while
+# it matches and gives up after GREP_SECONDS: the agent then gets the tool's error. The pattern is compiled as τ²'s
+# does it (re, a pattern re rejects searched as literal text), and the documents, scores and order are τ²'s. On 21,769
+# distinct patterns agents gave the tool in our studies (109k of 255k calls), every document's score was the same as
+# re's; re took at most 1.7 s on any of them (median 14 ms), so 30 s ends only a runaway.
 GREP_SECONDS = float(os.environ.get("TAU2_GREP_SECONDS", "30"))
 
 
@@ -447,7 +447,7 @@ def task_ids(domain: str, split: str) -> list[str]:
 UNRUNNABLE = {
     "banking_knowledge": {
         "task_034": "τ²'s simulated user never produces its first message (UserMessage must have either content or "
-        "tool calls), in every trial of the Haiku 5.5 baselines (2026-10-19 and 2026-10-20)",
+        "tool calls), in every trial of two Haiku 5.5 baselines",
     },
 }
 

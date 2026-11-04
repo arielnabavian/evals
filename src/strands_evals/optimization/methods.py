@@ -747,7 +747,7 @@ class Reflection(Method):
 
     It writes each text it changes in full, and may add, rewrite, reorder or remove anything. Each variable says what
     it is (``TextValue(about=...)``) and its limit (``max_chars``); a value over its limit is sent back to be shortened,
-    in the same conversation, up to ``over_limit_retries`` times (2; 0 is round 3's), and one still over is dropped and
+    in the same conversation, up to ``over_limit_retries`` times (2; 0: never), and one still over is dropped and
     the held one kept. A submission whose text carries a version's header is refused (``_no_version_header``) and the
     agent told why; a turn that ends on such a refusal is sent back the same way. Options go to the optimizer
     (``model_config``, ``n_sample_traces``, templates, ...).
@@ -1039,8 +1039,8 @@ def _sum(into: dict[str, float], usage: dict[str, float]) -> None:
 KINDS = {"structure": SELECTORS, "numbers": ("float", "int", "choice"), "text": ("text",), "skills": ("skills",)}
 # The default structure block's TPE startup: a structural block is asked once a round (Nested), and a run has few rounds
 # (3 at width 4, 12 iterations, Fixed(4)). TPE's startup of 4 counts the baseline (shared as evidence) and every round
-# told, so every round's structure was a random draw (round 3: 52-77% of full-space candidates ran under structures
-# never selected). 2: the baseline and one random round, then TPE's model chooses each round from the rounds' results.
+# told, so every round's structure was a random draw (and most candidates of a full space ran under structures never
+# selected). 2: the baseline and one random round, then TPE's model chooses each round from the rounds' results.
 # A structure block given in Search(blocks=...) keeps its own TPE(n_startup_trials=...).
 STRUCTURE_STARTUP = 2
 DEFAULT_METHODS: dict[str, Callable[[], Method]] = {"text": Reflection, "skills": SkillCuration}  # any other: TPE
