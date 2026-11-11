@@ -219,7 +219,8 @@ strands-evals/
 │   │       ├── report.py
 │   │       ├── diagnose.py
 │   │       ├── generate.py
-│   │       └── fetch.py                      # pull Session JSON from a TraceProvider
+│   │       ├── fetch.py                      # pull Session JSON from a TraceProvider
+│   │       └── _temporary_run_harness.py     # TEMPORARY: let run take strands dev harness files
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │
