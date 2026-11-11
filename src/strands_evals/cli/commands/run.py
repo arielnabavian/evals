@@ -28,6 +28,7 @@ from .._entrypoint import (
     resolve_task,
 )
 from .._io import read_text_input, write_text_output
+from ._temporary_run_harness import temporary_harness_task
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +327,14 @@ def _run(args: argparse.Namespace) -> int:
             return EXIT_BAD_INPUT
         experiment = _build_ad_hoc_experiment(args, evaluators, diagnosis_config)
 
-    if args.agent is not None:
+    temporary_task = (
+        temporary_harness_task(args.agent, args.typescript_runner, _trace_attrs_dict(args.trace_attributes))
+        if args.agent is not None
+        else None
+    )
+    if temporary_task is not None:
+        task_function = temporary_task
+    elif args.agent is not None:
         entry = resolve_agent(args.agent)
         task_function = synthesize_task_function(
             entry,
@@ -465,8 +473,9 @@ def add_subparser(
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument(
         "--agent",
-        metavar="MODULE:ATTR",
+        metavar="MODULE:ATTR|PATH.py|PATH.ts",
         help=(
+            "a strands dev harness file (TEMPORARY: PATH.py, or PATH.ts with --typescript-runner), or the "
             "entry point for a factory callable that returns a strands.Agent. "
             "Zero-arg ('def build_agent() -> Agent: ...') or one-arg "
             "('def build_agent(case: Case) -> Agent: ...'). The factory is "
@@ -475,6 +484,15 @@ def add_subparser(
             "callables (custom agent classes, partials, instances with __call__) "
             "are accepted but cross-case isolation becomes the factory's "
             "responsibility. For non-standard task shapes use --task instead."
+        ),
+    )
+    parser.add_argument(
+        "--typescript-runner",
+        metavar="COMMAND",
+        default=None,
+        help=(
+            "TEMPORARY: command that starts the Node runner for a TypeScript harness file (--agent PATH.ts). "
+            "The command gets the agent file and the project root as its last two arguments."
         ),
     )
     target.add_argument(
