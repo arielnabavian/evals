@@ -277,7 +277,16 @@ def test_should_exit_with_a_runtime_error_when_every_baseline_trial_fails(harnes
     code = optimize_harness(tmp_path, source, "--iterations", "0", "--no-split")
 
     assert code == 3
-    assert "strands-evals: error:" in capsys.readouterr().err
+    assert "Check that the agent can answer one of the cases" in capsys.readouterr().err
+
+
+def test_should_suggest_no_split_when_the_split_leaves_no_train_cases(harness, tmp_path, capsys):
+    code = optimize_harness(
+        tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "0", "--split", "0.1,0.45,0.45"
+    )
+
+    assert code == 2
+    assert "pass --no-split" in capsys.readouterr().err
 
 
 def test_should_refuse_the_record_before_loading_the_agent_when_it_holds_a_study(harness, tmp_path, capsys):
@@ -313,7 +322,11 @@ def test_should_tune_a_tunable_factory_when_given_module_attr(tmp_path):
 @pytest.mark.parametrize(
     ("source", "tune", "message"),
     [
-        ("from strands_harness import create_harness\nhelper = create_harness()\n", "effort", 'as "agent"'),
+        (
+            "from strands_harness import create_harness\nhelper = create_harness()\n",
+            "effort",
+            "Export one, for example agent = create_harness(...)",
+        ),
         (
             "from strands_harness import create_harness\nbuilt = create_harness()\nagent = built\n",
             "effort",
@@ -324,13 +337,13 @@ def test_should_tune_a_tunable_factory_when_given_module_attr(tmp_path):
             "from tests.strands_evals.optimization.helpers import Says\n"
             "agent = create_harness(model=Says(text='x'))\n",
             "effort",
-            "Model instance",
+            "Pass the model as an id string",
         ),
         (
             "from strands import Agent\nfrom tests.strands_evals.optimization.helpers import Says\n"
             "agent = Agent(model=Says(text='x'), callback_handler=None)\n",
             "instructions",
-            "must build its agent with create_harness",
+            "Build the agent with create_harness(...)",
         ),
         (
             "from strands_harness import create_harness\nagent = create_harness(session_manager=object())\n",
@@ -340,7 +353,7 @@ def test_should_tune_a_tunable_factory_when_given_module_attr(tmp_path):
         (
             "from strands_harness import create_harness\nagent = create_harness(system_prompt='You are terse.')\n",
             "instructions",
-            "system_prompt",
+            "Move that text into instructions",
         ),
         (
             "from strands_harness import create_harness\n"
@@ -348,12 +361,12 @@ def test_should_tune_a_tunable_factory_when_given_module_attr(tmp_path):
             "    return create_harness(**overrides)\n"
             "agent = create_harness()\n",
             "effort",
-            "async",
+            "Change it to def create_agent(**overrides)",
         ),
         (
             "from strands_harness import create_harness\nagent = create_harness(model='bedrock/nolevels')\n",
             "effort",
-            "no reasoning levels",
+            "Tune instructions instead",
         ),
     ],
 )

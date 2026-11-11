@@ -34,6 +34,13 @@ _TRIAL_OVERRIDES: dict[str, Any] = {"session": False, "memory": False, "callback
 _INSTRUCTIONS_MIN_CHAR_LIMIT = 8000
 _DEFAULT_ITERATIONS = 4
 _DEFAULT_SPLIT = (0.5, 0.25, 0.25)
+_NEXT_STEPS = (
+    ("Split:", "Add more cases to the experiment, or pass --no-split to search and select on every case"),
+    (
+        "the baseline (the agent at its defaults)",
+        "Check that the agent can answer one of the cases, for example in a strands dev chat, then try again",
+    ),
+)
 
 
 class _Harness(Protocol):
@@ -86,7 +93,10 @@ class _HarnessFile:
             overrides["instructions"] = None
         agent = self.factory(**overrides)
         if not isinstance(agent, Agent):
-            raise TypeError(f"create_agent(**overrides) must return a Strands Agent, got {type(agent).__name__}")
+            raise TypeError(
+                f"create_agent(**overrides) returned {type(agent).__name__}, not a Strands Agent. "
+                "Return the agent that create_harness(...) builds, then try again."
+            )
         return agent
 
     def builds_with(self, **values: Any) -> bool:
@@ -101,7 +111,10 @@ def _strands_harness() -> ModuleType:
     try:
         return importlib.import_module("strands_harness")
     except ImportError as e:
-        raise EntryPointError(f"a harness file needs strands-harness installed in this environment ({e})") from e
+        raise EntryPointError(
+            f"a Python harness file needs the strands-harness package, which is missing ({e}). "
+            "Install strands-harness in the project's environment, then try again."
+        ) from e
 
 
 def _optimization() -> ModuleType:
@@ -184,10 +197,16 @@ def _load_harness_file(path_text: str) -> _HarnessFile:
         module = _import_harness_module(path, path_text)
     agent = getattr(module, "agent", None)
     if not isinstance(agent, Agent):
-        raise EntryPointError(f'{path_text} must export a Strands Agent as "agent"')
+        raise EntryPointError(
+            f'{path_text} does not export a Strands Agent named "agent". '
+            "Export one, for example agent = create_harness(...), then try again."
+        )
     construction = next((c for c in capture.constructions if c.agent is agent), None)
     if construction is None:
-        raise EntryPointError(f"{path_text} must build its agent with create_harness(...)")
+        raise EntryPointError(
+            f"{path_text} builds its agent without create_harness(...), so optimize cannot read its settings. "
+            "Build the agent with create_harness(...), then try again."
+        )
     shared = sorted(set(construction.options) & _SHARED_STATE_OPTIONS)
     if shared:
         raise EntryPointError(
@@ -196,7 +215,10 @@ def _load_harness_file(path_text: str) -> _HarnessFile:
         )
     factory = getattr(module, "create_agent", None)
     if inspect.iscoroutinefunction(factory):
-        raise EntryPointError(f"{path_text} defines create_agent as async; the optimizer needs a regular function")
+        raise EntryPointError(
+            f"{path_text} defines create_agent as async, and the optimizer calls it as a regular function. "
+            "Change it to def create_agent(**overrides), then try again."
+        )
     if callable(factory):
         return _HarnessFile(factory, construction.options)
     if not _assigns_agent_from_create_harness(path):
@@ -215,7 +237,8 @@ def _load_harness_file(path_text: str) -> _HarnessFile:
 def _instructions_domain(harness_file: _Harness, optimization: ModuleType) -> Any:
     if "system_prompt" in harness_file.options:
         raise EntryPointError(
-            "instructions cannot be tuned: the agent passes system_prompt=..., which replaces its instructions"
+            "instructions cannot be tuned: the agent passes a full system prompt, which replaces its instructions. "
+            "Move that text into instructions, or tune another setting with --tune effort."
         )
     baseline = harness_file.options.get("instructions") or ""
     return optimization.TextValue(
@@ -228,12 +251,18 @@ def _instructions_domain(harness_file: _Harness, optimization: ModuleType) -> An
 def _effort_domain(harness_file: _Harness, optimization: ModuleType) -> Any:
     model = harness_file.options.get("model")
     if model is not None and not isinstance(model, str):
-        raise EntryPointError("effort cannot be tuned: the agent's model is a Model instance, which ignores effort")
+        raise EntryPointError(
+            "effort cannot be tuned: the agent's model is a model object, and the harness ignores effort for model "
+            "objects. Pass the model as an id string such as bedrock/<model id>, or tune instructions (the default)."
+        )
     baseline = harness_file.options.get("effort", "auto")
     candidates = [level for level in _EFFORT_LEVELS if level != "auto" or baseline == "auto"]
     levels = [level for level in candidates if level == baseline or harness_file.builds_with(effort=level)]
     if len(levels) < 2 or all(level in _LEVELS_WITHOUT_REASONING for level in levels):
-        raise EntryPointError(f"effort cannot be tuned: the agent's model has no reasoning levels to choose ({levels})")
+        raise EntryPointError(
+            f"effort cannot be tuned: the agent's model accepts no reasoning levels besides {levels}. "
+            "Tune instructions instead (the default)."
+        )
     return optimization.Choice(levels, default=baseline)
 
 
@@ -299,7 +328,10 @@ def _search(factory: Any, args: argparse.Namespace, optimization: ModuleType) ->
 def _objectives(metrics: list[str] | None, experiment: Experiment, optimization: ModuleType) -> Any:
     names = list(dict.fromkeys(metrics or [evaluator.get_name() for evaluator in experiment.evaluators]))
     if not names:
-        raise EntryPointError("the experiment has no evaluators; pass --maximize METRIC")
+        raise EntryPointError(
+            "the experiment has no evaluators, so there is nothing to score. "
+            "Add an evaluator to the experiment file, or pass --maximize METRIC."
+        )
     goals = [optimization.Maximize(name) for name in names]
     return goals[0] if len(goals) == 1 else optimization.WeightedSum(*goals)
 
@@ -356,15 +388,25 @@ def _optimize(args: argparse.Namespace) -> int:
         try:
             study = _study(args, optimization)
         except (TypeError, ValueError) as e:
-            emit_error(str(e), debug=getattr(args, "debug", False), exc=e)
+            emit_error(_with_next_step(str(e)), debug=getattr(args, "debug", False), exc=e)
             return EXIT_BAD_INPUT
-        result = study.optimize(args.iterations, patience=args.patience)
+        try:
+            result = study.optimize(args.iterations, patience=args.patience)
+        except RuntimeError as e:
+            raise RuntimeError(_with_next_step(str(e))) from e
     if output_format == "json":
         sys.stdout.write(json.dumps(result.to_dict(), indent=2) + "\n")
     else:
         for line in _summary_lines(result, args.record):
             print(line)  # noqa: T201
     return EXIT_OK
+
+
+def _with_next_step(message: str) -> str:
+    for marker, next_step in _NEXT_STEPS:
+        if marker in message:
+            return f"{message}. {next_step}"
+    return message
 
 
 def _parse_settings(raw: str) -> tuple[str, ...]:

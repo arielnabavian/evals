@@ -113,9 +113,13 @@ def test_should_count_the_runner_usage_when_trials_finish(tmp_path, monkeypatch,
     ("description", "tune", "message"),
     [
         ({**DESCRIPTION, "shared_state": ["sessionManager"]}, "effort", "sessionManager"),
-        ({**DESCRIPTION, "system_prompt": True}, "instructions", "system_prompt"),
-        ({**DESCRIPTION, "model": None, "model_is_instance": True}, "effort", "Model instance"),
-        ({"error": "Cannot find module '@strands-agents/harness'"}, "effort", "could not be loaded"),
+        ({**DESCRIPTION, "system_prompt": True}, "instructions", "Move that text into instructions"),
+        ({**DESCRIPTION, "model": None, "model_is_instance": True}, "effort", "Pass the model as an id string"),
+        (
+            {"error": "Cannot find module '@strands-agents/harness'"},
+            "effort",
+            "check that strands dev can open this agent",
+        ),
     ],
 )
 def test_should_reject_the_typescript_agent_when_the_runner_reports_it_cannot_be_tuned(

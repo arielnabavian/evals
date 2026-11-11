@@ -39,7 +39,9 @@ class TypeScriptRunner:
                 bufsize=1,
             )
         except OSError as e:
-            raise EntryPointError(f"cannot start the TypeScript runner {command[0]}: {e}") from e
+            raise EntryPointError(
+                f"cannot start the TypeScript runner {command[0]}: {e}. Check the --typescript-runner command."
+            ) from e
         self._pending: dict[int, Future[dict[str, Any]]] = {}
         self._lock = threading.Lock()
         self._next_id = 0
@@ -190,16 +192,22 @@ def load_typescript_harness(path_text: str, runner_command: str | None) -> TypeS
         )
     path = Path(path_text).expanduser().resolve()
     if not path.is_file():
-        raise EntryPointError(f"cannot find the TypeScript agent {path_text}")
+        raise EntryPointError(f"cannot find the TypeScript agent {path_text}. Check the path, then try again.")
     runner = TypeScriptRunner([*shlex.split(runner_command), str(path), str(Path.cwd())])
     try:
         description = runner.call({"type": "describe"})
     except Exception as e:
         runner.close()
-        raise EntryPointError(f"{path_text} could not be loaded: {e}") from e
+        raise EntryPointError(
+            f"{path_text} could not be loaded: {e}. Fix that error, check that strands dev can open this agent, "
+            "then try again."
+        ) from e
     if description.get("error"):
         runner.close()
-        raise EntryPointError(f"{path_text} could not be loaded: {description['error']}")
+        raise EntryPointError(
+            f"{path_text} could not be loaded: {description['error']}. Fix that error, check that strands dev can "
+            "open this agent, then try again."
+        )
     shared = list(description.get("shared_state") or [])
     if shared:
         runner.close()
