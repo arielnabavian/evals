@@ -191,7 +191,8 @@ strands-evals/
 │   │       ├── report.py
 │   │       ├── diagnose.py
 │   │       ├── generate.py
-│   │       └── fetch.py                      # pull Session JSON from a TraceProvider
+│   │       ├── fetch.py                      # pull Session JSON from a TraceProvider
+│   │       └── temporary_optimize.py         # TEMPORARY: run a strands_evals.optimization Study
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │
@@ -254,7 +255,7 @@ strands-evals/
 ### Directory Purposes
 
 - **`src/strands_evals/`**: All production code
-- **`src/strands_evals/cli/`**: `strands-evals` console script — six subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
+- **`src/strands_evals/cli/`**: `strands-evals` console script — seven subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`, and the TEMPORARY `optimize`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
 - **`src/strands_evals/optimization/`**: `Study` optimizes a `@tunable` agent factory against an `Experiment`: candidates (values for the factory's tunable arguments), each run as trials (case × repetition); a search: blocks (a method and the declared variables it proposes) and a schedule for them; the record of every candidate. Its guide is `src/strands_evals/optimization/README.md`. Optional extra: `pip install strands-agents-evals[optimization]`.
 - **`tests/strands_evals/`**: Unit tests mirroring src/ structure
 - **`tests/strands_evals/cli/`**: CLI tests; fixtures live under `cli/fixtures/` and are referenced by tests via `tests.strands_evals.cli.fixtures.*:attr` specs

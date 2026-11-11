@@ -800,7 +800,7 @@ RRSI at matched budgets, every number on held-out test cases with 90% intervals 
   a record yet.
 - The validation model is not checked the way the search model is. During search, the held-out check moved the incumbent
   to measured means in 26 of 41 searches of width 4 or more.
-- There is no command line or YAML yet; the Python API is the only surface.
+- YAML is not available. The TEMPORARY `strands-evals optimize` command runs a study from the command line; `strands-evals optimize --help` gives its flags.
 - BayesBench is not public yet (see [Installing](#installing)).
 
 ## Extending it
