@@ -35,10 +35,17 @@ _INSTRUCTIONS_MIN_CHAR_LIMIT = 8000
 _DEFAULT_ITERATIONS = 4
 _DEFAULT_SPLIT = (0.5, 0.25, 0.25)
 _NEXT_STEPS = (
-    ("Split:", "Add more cases to the experiment, or pass --no-split to search and select on every case"),
+    (
+        "leave no train cases",
+        "Add more cases to the experiment, or pass --no-split to search and select on every case",
+    ),
+    ("shares must", "Fix --split so that the three shares sum to 1, or pass --no-split"),
+    ("unique name", "Give every case in the experiment file a unique name, then try again"),
+    ("has no cases", "Add cases to the experiment file, or create a new one with /experiment in strands dev"),
     (
         "the baseline (the agent at its defaults)",
-        "Check that the agent can answer one of the cases, for example in a strands dev chat, then try again",
+        "The cause is in parentheses: if the agent failed, check that it can answer one of the cases in a strands "
+        "dev chat; if a judge or the model service failed, check its credentials, then try again",
     ),
 )
 
@@ -186,7 +193,10 @@ def _import_harness_module(path: Path, path_text: str) -> ModuleType:
     try:
         return importlib.import_module(name)
     except Exception as e:
-        raise EntryPointError(f"failed to import '{path_text}' as {name}: {e}") from e
+        raise EntryPointError(
+            f"failed to import '{path_text}' as {name}: {e}. Fix that error, then try again; strands dev shows the "
+            "same error when it opens this agent"
+        ) from e
 
 
 def _load_harness_file(path_text: str) -> _HarnessFile:
@@ -358,7 +368,7 @@ def _log_to_stderr(line: str) -> None:
 
 def _study(args: argparse.Namespace, optimization: ModuleType) -> Any:
     custom_evaluators = resolve_custom_evaluators(args.custom_evaluator or [])
-    experiment = Experiment.from_file(args.experiment_file, custom_evaluators=custom_evaluators)
+    experiment = _load_experiment(args.experiment_file, custom_evaluators)
     factory = _tunable_agent(args.agent, args.tune, optimization, args.typescript_runner)
     return optimization.Study(
         agent=factory,
@@ -405,8 +415,20 @@ def _optimize(args: argparse.Namespace) -> int:
 def _with_next_step(message: str) -> str:
     for marker, next_step in _NEXT_STEPS:
         if marker in message:
-            return f"{message}. {next_step}"
+            return f"{message.rstrip('.')}. {next_step}."
     return message
+
+
+def _load_experiment(path: str, custom_evaluators: list[Any]) -> Experiment:
+    try:
+        return Experiment.from_file(path, custom_evaluators=custom_evaluators)
+    except FileNotFoundError:
+        raise
+    except (ValueError, KeyError, TypeError) as e:
+        raise EntryPointError(
+            f"{path} is not a usable Experiment file ({type(e).__name__}: {e}). Fix the file (strands-evals validate "
+            f"{path} checks it), or create a new one with /experiment in strands dev"
+        ) from e
 
 
 def _parse_settings(raw: str) -> tuple[str, ...]:

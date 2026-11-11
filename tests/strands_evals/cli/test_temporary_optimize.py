@@ -277,16 +277,60 @@ def test_should_exit_with_a_runtime_error_when_every_baseline_trial_fails(harnes
     code = optimize_harness(tmp_path, source, "--iterations", "0", "--no-split")
 
     assert code == 3
-    assert "Check that the agent can answer one of the cases" in capsys.readouterr().err
+    assert "if the agent failed, check that it can answer one of the cases" in capsys.readouterr().err
 
 
-def test_should_suggest_no_split_when_the_split_leaves_no_train_cases(harness, tmp_path, capsys):
-    code = optimize_harness(
-        tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "0", "--split", "0.1,0.45,0.45"
+@pytest.mark.parametrize(
+    ("split", "message"),
+    [
+        ("0.1,0.45,0.45", "Add more cases to the experiment, or pass --no-split"),
+        ("0.5,0.5,0.5", "Fix --split so that the three shares sum to 1"),
+    ],
+)
+def test_should_suggest_a_fix_for_the_split_when_its_shares_do_not_work(harness, tmp_path, capsys, split, message):
+    code = optimize_harness(tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "0", "--split", split)
+
+    assert code == 2
+    assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("{not json", "is not a usable Experiment file (JSONDecodeError"),
+        (json.dumps({"evaluators": []}), "is not a usable Experiment file (KeyError"),
+        (json.dumps({"cases": [], "evaluators": [{"evaluator_type": "Equals"}]}), "Add cases to the experiment file"),
+    ],
+)
+def test_should_name_the_experiment_file_and_its_fix_when_it_cannot_be_used(
+    harness, tmp_path, capsys, content, message
+):
+    experiment = tmp_path / "experiment.json"
+    experiment.write_text(content)
+    agent = write_harness(tmp_path, DIRECT_HARNESS)
+
+    code = optimize(
+        str(experiment), "--agent", str(agent), "--record", str(tmp_path / "record"), "--tune", "effort", "--no-split"
     )
 
     assert code == 2
-    assert "pass --no-split" in capsys.readouterr().err
+    assert message in capsys.readouterr().err
+
+
+def test_should_point_to_strands_dev_when_the_agent_file_fails_to_import(
+    harness, fresh_modules, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    write_harness(tmp_path, "", "desk/__init__.py")
+    agent = write_harness(tmp_path, "raise RuntimeError('the agent is broken')\n", "desk/agent.py")
+    experiment = write_experiment(tmp_path)
+
+    code = optimize(str(experiment), "--agent", str(agent), "--record", "record", "--tune", "effort")
+
+    assert code == 2
+    error = capsys.readouterr().err
+    assert "the agent is broken" in error
+    assert "strands dev shows the same error when it opens this agent" in error
 
 
 def test_should_refuse_the_record_before_loading_the_agent_when_it_holds_a_study(harness, tmp_path, capsys):

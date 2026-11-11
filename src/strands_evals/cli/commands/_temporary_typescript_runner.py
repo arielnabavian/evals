@@ -40,7 +40,7 @@ class TypeScriptRunner:
             )
         except OSError as e:
             raise EntryPointError(
-                f"cannot start the TypeScript runner {command[0]}: {e}. Check the --typescript-runner command."
+                f"cannot start the TypeScript runner {command[0]}: {e}. Restart strands dev, then try again."
             ) from e
         self._pending: dict[int, Future[dict[str, Any]]] = {}
         self._lock = threading.Lock()
