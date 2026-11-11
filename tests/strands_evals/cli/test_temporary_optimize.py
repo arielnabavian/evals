@@ -60,9 +60,8 @@ def harness(monkeypatch):
 
 @pytest.fixture
 def fresh_modules():
-    before = set(sys.modules)
     yield
-    for name in set(sys.modules) - before:
+    for name in [name for name in sys.modules if name == "desk" or name.startswith("desk.")]:
         del sys.modules[name]
 
 
