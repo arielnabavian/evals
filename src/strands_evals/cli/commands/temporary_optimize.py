@@ -14,13 +14,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Protocol
 
 from strands import Agent
 
 from ...experiment import Experiment
 from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error, resolve_format
 from .._entrypoint import EntryPointError, _import_from_path, import_attr, resolve_custom_evaluators
+from ._temporary_typescript_runner import TYPESCRIPT_SUFFIXES, load_typescript_harness
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,15 @@ _TRIAL_OVERRIDES: dict[str, Any] = {"session": False, "memory": False, "callback
 _INSTRUCTIONS_MIN_CHAR_LIMIT = 8000
 _DEFAULT_ITERATIONS = 4
 _DEFAULT_SPLIT = (0.5, 0.25, 0.25)
+
+
+class _Harness(Protocol):
+    @property
+    def options(self) -> dict[str, Any]: ...
+
+    def build(self, values: dict[str, Any]) -> Any: ...
+
+    def builds_with(self, **values: Any) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -202,7 +212,7 @@ def _load_harness_file(path_text: str) -> _HarnessFile:
     return _HarnessFile(create_agent, construction.options)
 
 
-def _instructions_domain(harness_file: _HarnessFile, optimization: ModuleType) -> Any:
+def _instructions_domain(harness_file: _Harness, optimization: ModuleType) -> Any:
     if "system_prompt" in harness_file.options:
         raise EntryPointError(
             "instructions cannot be tuned: the agent passes system_prompt=..., which replaces its instructions"
@@ -215,7 +225,7 @@ def _instructions_domain(harness_file: _HarnessFile, optimization: ModuleType) -
     )
 
 
-def _effort_domain(harness_file: _HarnessFile, optimization: ModuleType) -> Any:
+def _effort_domain(harness_file: _Harness, optimization: ModuleType) -> Any:
     model = harness_file.options.get("model")
     if model is not None and not isinstance(model, str):
         raise EntryPointError("effort cannot be tuned: the agent's model is a Model instance, which ignores effort")
@@ -227,14 +237,13 @@ def _effort_domain(harness_file: _HarnessFile, optimization: ModuleType) -> Any:
     return optimization.Choice(levels, default=baseline)
 
 
-_HARNESS_DOMAINS: dict[str, Callable[[_HarnessFile, ModuleType], Any]] = {
+_HARNESS_DOMAINS: dict[str, Callable[[_Harness, ModuleType], Any]] = {
     "instructions": _instructions_domain,
     "effort": _effort_domain,
 }
 
 
-def _harness_agent(path_text: str, settings: tuple[str, ...], optimization: ModuleType) -> Any:
-    harness_file = _load_harness_file(path_text)
+def _harness_agent(harness_file: _Harness, settings: tuple[str, ...], optimization: ModuleType) -> Any:
     bindings = {name: _HARNESS_DOMAINS[name](harness_file, optimization) for name in settings}
 
     def create_agent(**values: Any) -> Any:
@@ -243,14 +252,28 @@ def _harness_agent(path_text: str, settings: tuple[str, ...], optimization: Modu
     return optimization.TunableFactory(create_agent, bindings)
 
 
-def _tunable_agent(spec: str, settings: tuple[str, ...] | None, optimization: ModuleType) -> Any:
-    if spec.endswith(".py"):
-        return _harness_agent(spec, settings or _DEFAULT_HARNESS_SETTINGS, optimization)
+def _load_harness(spec: str, typescript_runner: str | None) -> _Harness | None:
+    suffix = Path(spec).suffix
+    if suffix == ".py":
+        return _load_harness_file(spec)
+    if suffix in TYPESCRIPT_SUFFIXES:
+        return load_typescript_harness(spec, typescript_runner)
+    return None
+
+
+def _tunable_agent(
+    spec: str, settings: tuple[str, ...] | None, optimization: ModuleType, typescript_runner: str | None = None
+) -> Any:
+    harness = _load_harness(spec, typescript_runner)
+    if harness is not None:
+        return _harness_agent(harness, settings or _DEFAULT_HARNESS_SETTINGS, optimization)
     if settings is not None:
-        raise EntryPointError("--tune applies to a harness file (PATH.py); a @tunable factory declares its own space")
+        raise EntryPointError(
+            "--tune applies to a harness file (PATH.py or PATH.ts); a @tunable factory declares its own space"
+        )
     factory = import_attr(spec)
     if not isinstance(factory, optimization.TunableFactory):
-        raise EntryPointError(f"--agent {spec} must name a @tunable factory, or be a harness file (PATH.py)")
+        raise EntryPointError(f"--agent {spec} must name a @tunable factory, or be a harness file (PATH.py or PATH.ts)")
     return factory
 
 
@@ -304,7 +327,7 @@ def _log_to_stderr(line: str) -> None:
 def _study(args: argparse.Namespace, optimization: ModuleType) -> Any:
     custom_evaluators = resolve_custom_evaluators(args.custom_evaluator or [])
     experiment = Experiment.from_file(args.experiment_file, custom_evaluators=custom_evaluators)
-    factory = _tunable_agent(args.agent, args.tune, optimization)
+    factory = _tunable_agent(args.agent, args.tune, optimization, args.typescript_runner)
     return optimization.Study(
         agent=factory,
         experiment=experiment,
@@ -404,12 +427,12 @@ def add_subparser(
     parser.add_argument("experiment_file", metavar="EXPERIMENT_FILE", help="path to a serialized Experiment JSON file")
     parser.add_argument(
         "--agent",
-        metavar="PATH.py|MODULE:ATTR",
+        metavar="PATH.py|PATH.ts|MODULE:ATTR",
         required=True,
         help=(
-            "a harness file that exports a Strands Agent as 'agent', built with create_harness(...) or by "
-            "create_agent(**overrides); or a @tunable factory. Run from the project root so the file's imports "
-            "resolve."
+            "a Python harness file that exports a Strands Agent as 'agent', built with create_harness(...) or by "
+            "create_agent(**overrides); a TypeScript harness file that --typescript-runner can build (TEMPORARY); "
+            "or a @tunable factory. Run from the project root so the file's imports resolve."
         ),
     )
     parser.add_argument(
@@ -462,6 +485,15 @@ def add_subparser(
         "--no-split",
         action="store_true",
         help="search and select on every case, and test nothing",
+    )
+    parser.add_argument(
+        "--typescript-runner",
+        metavar="COMMAND",
+        default=None,
+        help=(
+            "TEMPORARY: command that starts the Node runner for a TypeScript agent (PATH.ts). The command gets the "
+            "agent file and the project root as its last two arguments, and speaks JSON lines on stdin and stdout"
+        ),
     )
     parser.add_argument(
         "--rewriter-model",
