@@ -4,6 +4,8 @@ import argparse
 import ast
 import contextlib
 import importlib
+import importlib.machinery
+import inspect
 import json
 import logging
 import sys
@@ -25,6 +27,8 @@ logger = logging.getLogger(__name__)
 _HARNESS_SETTINGS = ("instructions", "effort")
 _DEFAULT_HARNESS_SETTINGS = ("instructions",)
 _EFFORT_LEVELS = ("auto", "off", "minimal", "low", "medium", "high", "xhigh", "max")
+_LEVELS_WITHOUT_REASONING = frozenset({"auto", "off"})
+_SHARED_STATE_OPTIONS = frozenset({"session_manager", "memory_manager", "storage"})
 _TRIAL_OVERRIDES: dict[str, Any] = {"session": False, "memory": False, "callback_handler": None}
 _INSTRUCTIONS_MIN_CHAR_LIMIT = 8000
 _DEFAULT_ITERATIONS = 4
@@ -70,7 +74,10 @@ class _HarnessFile:
         overrides = {**values, **_TRIAL_OVERRIDES}
         if overrides.get("instructions") == "":
             overrides["instructions"] = None
-        return self.factory(**overrides)
+        agent = self.factory(**overrides)
+        if not isinstance(agent, Agent):
+            raise TypeError(f"create_agent(**overrides) must return a Strands Agent, got {type(agent).__name__}")
+        return agent
 
     def builds_with(self, **values: Any) -> bool:
         try:
@@ -122,19 +129,64 @@ def _assigns_agent_from_create_harness(path: Path) -> bool:
     return any(_is_agent_built_by_create_harness(node) for node in tree.body)
 
 
+def _installed_module_name(parts: list[str], root: Path) -> str | None:
+    for index in range(1, len(parts) - 1):
+        name = parts[index]
+        if not name.isidentifier():
+            continue
+        spec = importlib.machinery.PathFinder.find_spec(name)
+        if spec is None:
+            continue
+        expected = root.joinpath(*parts[: index + 1]).resolve()
+        if any(Path(location).resolve() == expected for location in spec.submodule_search_locations or []):
+            return ".".join(parts[index:])
+    return None
+
+
+def _module_name(path: Path, root: Path) -> str | None:
+    if not path.is_relative_to(root):
+        return None
+    parts = list(path.relative_to(root).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    packaged = bool(parts) and all(
+        root.joinpath(*parts[:index], "__init__.py").is_file() for index in range(1, len(parts))
+    )
+    return ".".join(parts) if packaged else _installed_module_name(parts, root)
+
+
+def _import_harness_module(path: Path, path_text: str) -> ModuleType:
+    name = _module_name(path, Path.cwd().resolve())
+    if name is None:
+        return _import_from_path(str(path), path_text)
+    sys.modules.pop(name, None)
+    try:
+        return importlib.import_module(name)
+    except Exception as e:
+        raise EntryPointError(f"failed to import '{path_text}' as {name}: {e}") from e
+
+
 def _load_harness_file(path_text: str) -> _HarnessFile:
     path = Path(path_text).expanduser().resolve()
     harness = _strands_harness()
     sys.path[:0] = [d for d in (str(Path.cwd()), str(path.parent)) if d not in sys.path]
     with _HarnessCapture(harness) as capture:
-        module = _import_from_path(str(path), path_text)
+        module = _import_harness_module(path, path_text)
     agent = getattr(module, "agent", None)
     if not isinstance(agent, Agent):
         raise EntryPointError(f'{path_text} must export a Strands Agent as "agent"')
     construction = next((c for c in capture.constructions if c.agent is agent), None)
     if construction is None:
         raise EntryPointError(f"{path_text} must build its agent with create_harness(...)")
+    shared = sorted(set(construction.options) & _SHARED_STATE_OPTIONS)
+    if shared:
+        raise EntryPointError(
+            f"{path_text} passes {', '.join(shared)} to create_harness(...); "
+            "every trial would share it, so remove it to optimize this agent"
+        )
     factory = getattr(module, "create_agent", None)
+    if inspect.iscoroutinefunction(factory):
+        raise EntryPointError(f"{path_text} defines create_agent as async; the optimizer needs a regular function")
     if callable(factory):
         return _HarnessFile(factory, construction.options)
     if not _assigns_agent_from_create_harness(path):
@@ -151,6 +203,10 @@ def _load_harness_file(path_text: str) -> _HarnessFile:
 
 
 def _instructions_domain(harness_file: _HarnessFile, optimization: ModuleType) -> Any:
+    if "system_prompt" in harness_file.options:
+        raise EntryPointError(
+            "instructions cannot be tuned: the agent passes system_prompt=..., which replaces its instructions"
+        )
     baseline = harness_file.options.get("instructions") or ""
     return optimization.TextValue(
         default=baseline,
@@ -164,9 +220,10 @@ def _effort_domain(harness_file: _HarnessFile, optimization: ModuleType) -> Any:
     if model is not None and not isinstance(model, str):
         raise EntryPointError("effort cannot be tuned: the agent's model is a Model instance, which ignores effort")
     baseline = harness_file.options.get("effort", "auto")
-    levels = [level for level in _EFFORT_LEVELS if level == baseline or harness_file.builds_with(effort=level)]
-    if len(levels) < 2:
-        raise EntryPointError(f"effort cannot be tuned: the agent's model accepts only {levels}")
+    candidates = [level for level in _EFFORT_LEVELS if level != "auto" or baseline == "auto"]
+    levels = [level for level in candidates if level == baseline or harness_file.builds_with(effort=level)]
+    if len(levels) < 2 or all(level in _LEVELS_WITHOUT_REASONING for level in levels):
+        raise EntryPointError(f"effort cannot be tuned: the agent's model has no reasoning levels to choose ({levels})")
     return optimization.Choice(levels, default=baseline)
 
 
@@ -262,7 +319,14 @@ def _study(args: argparse.Namespace, optimization: ModuleType) -> Any:
     )
 
 
+def _is_new_directory(path: Path) -> bool:
+    return not path.exists() or (path.is_dir() and not any(path.iterdir()))
+
+
 def _optimize(args: argparse.Namespace) -> int:
+    if not _is_new_directory(Path(args.record).expanduser()):
+        emit_error(f"--record {args.record} must be a new or empty directory; each study needs its own")
+        return EXIT_BAD_INPUT
     optimization = _optimization()
     output_format = resolve_format(args)
     with contextlib.redirect_stdout(sys.stderr):
