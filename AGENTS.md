@@ -192,7 +192,8 @@ strands-evals/
 │   │       ├── diagnose.py
 │   │       ├── generate.py
 │   │       ├── fetch.py                      # pull Session JSON from a TraceProvider
-│   │       └── temporary_optimize.py         # TEMPORARY: run a strands_evals.optimization Study
+│   │       ├── temporary_optimize.py         # TEMPORARY: run a strands_evals.optimization Study
+│   │       └── _temporary_typescript_runner.py  # TEMPORARY: run TypeScript agents through a Node runner
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │

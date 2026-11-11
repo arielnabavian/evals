@@ -23,6 +23,10 @@ _SETUP_TIMEOUT_SECONDS = 300.0
 _CLOSE_TIMEOUT_SECONDS = 5.0
 
 
+class RunnerGone(RuntimeError):
+    pass
+
+
 class TypeScriptRunner:
     def __init__(self, command: list[str]) -> None:
         try:
@@ -42,49 +46,76 @@ class TypeScriptRunner:
         threading.Thread(target=self._read_replies, name="typescript-runner", daemon=True).start()
         atexit.register(self.close)
 
-    def _send(self, message: dict[str, Any]) -> tuple[int, Future[dict[str, Any]]]:
+    def _write(self, payload: dict[str, Any]) -> None:
+        stdin = self._process.stdin
+        if stdin is None or stdin.closed or self._process.poll() is not None:
+            raise RunnerGone("the TypeScript runner has exited")
+        try:
+            stdin.write(json.dumps(payload) + "\n")
+            stdin.flush()
+        except OSError as e:
+            raise RunnerGone(f"the TypeScript runner stopped reading requests: {e}") from e
+
+    def _request(self, message: dict[str, Any]) -> tuple[int, Future[dict[str, Any]]]:
         future: Future[dict[str, Any]] = Future()
         with self._lock:
             self._next_id += 1
             request_id = self._next_id
             self._pending[request_id] = future
-            stdin = self._process.stdin
-            if stdin is None or stdin.closed:
+            try:
+                self._write({**message, "id": request_id})
+            except RunnerGone:
                 self._pending.pop(request_id)
-                future.set_exception(RuntimeError("the TypeScript runner is closed"))
-                return request_id, future
-            stdin.write(json.dumps({**message, "id": request_id}) + "\n")
-            stdin.flush()
+                raise
         return request_id, future
 
+    def _cancel(self, request_id: int) -> None:
+        with self._lock:
+            self._pending.pop(request_id, None)
+            try:
+                self._write({"type": "cancel", "target": request_id})
+            except RunnerGone:
+                logger.debug("request_id=<%s> | the typescript runner exited before the cancel", request_id)
+
     def _read_replies(self) -> None:
-        stdout = self._process.stdout
-        if stdout is not None:
-            for line in stdout:
-                try:
-                    reply = json.loads(line)
-                except ValueError:
-                    logger.warning("line=<%s> | ignored a TypeScript runner line that is not json", line.strip()[:200])
-                    continue
-                with self._lock:
-                    future = self._pending.pop(reply.get("id"), None)
-                if future is not None:
-                    future.set_result(reply)
-        failure = RuntimeError(f"the TypeScript runner exited with code {self._process.wait()}")
+        try:
+            for line in self._process.stdout or ():
+                self._deliver(line)
+        finally:
+            self._fail_pending()
+
+    def _deliver(self, line: str) -> None:
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            logger.warning("line=<%s> | ignored a typescript runner line that is not json", line.strip()[:200])
+            return
+        with self._lock:
+            future = self._pending.pop(reply.get("id"), None)
+        if future is not None and not future.done():
+            future.set_result(reply)
+
+    def _fail_pending(self) -> None:
+        try:
+            code: int | None = self._process.wait(timeout=_CLOSE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            code = None
+        failure = RunnerGone(f"the TypeScript runner exited with code {code}")
         with self._lock:
             pending, self._pending = self._pending, {}
         for future in pending.values():
-            future.set_exception(failure)
+            if not future.done():
+                future.set_exception(failure)
 
     def call(self, message: dict[str, Any]) -> dict[str, Any]:
-        return self._send(message)[1].result(timeout=_SETUP_TIMEOUT_SECONDS)
+        return self._request(message)[1].result(timeout=_SETUP_TIMEOUT_SECONDS)
 
     async def call_async(self, message: dict[str, Any]) -> dict[str, Any]:
-        request_id, future = self._send(message)
+        request_id, future = self._request(message)
         try:
             return await asyncio.wrap_future(future)
         except asyncio.CancelledError:
-            self._send({"type": "cancel", "target": request_id})
+            self._cancel(request_id)
             raise
 
     def close(self) -> None:
@@ -107,11 +138,18 @@ class _TypeScriptAgent:
         self.event_loop_metrics = SimpleNamespace(accumulated_usage={}, cycle_count=0)
 
     async def invoke_async(self, prompt: Any) -> str:
-        reply = await self._runner.call_async({"type": "run", "values": self._values, "input": prompt})
+        from ...optimization.trials import TrialInvalid
+
+        try:
+            reply = await self._runner.call_async({"type": "run", "values": self._values, "input": prompt})
+        except RunnerGone as e:
+            raise TrialInvalid(str(e)) from e
         self.messages = list(reply.get("messages") or [])
         self.event_loop_metrics = SimpleNamespace(
             accumulated_usage=dict(reply.get("usage") or {}), cycle_count=int(reply.get("cycles") or 0)
         )
+        if reply.get("error") and reply.get("retryable"):
+            raise TrialInvalid(f"the TypeScript agent's model call failed: {reply['error']}")
         if reply.get("error"):
             raise RuntimeError(f"the TypeScript agent failed: {reply['error']}")
         return str(reply.get("output") or "")
