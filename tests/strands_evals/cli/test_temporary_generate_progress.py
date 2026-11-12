@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -30,6 +32,7 @@ class _CaseAgent:
         self.calls = 0
 
     async def structured_output_async(self, output_model, prompt):
+        await asyncio.sleep(0)
         if _CaseAgent.failures:
             raise _CaseAgent.failures.pop(0)
         return output_model(name="refund", input=f"question for {prompt[-20:]}", expected_output="answer")
@@ -102,7 +105,7 @@ async def test_should_fail_every_queued_case_instead_of_hanging_when_the_agent_c
     generator, progress = _generator(path)
 
     with patch(AGENT, side_effect=ValueError("unknown model id")):
-        cases = await generator.generate_cases_async("Write refund cases.", num_cases=4)
+        cases = await asyncio.wait_for(generator.generate_cases_async("Write refund cases.", num_cases=4), timeout=5)
     progress.close()
 
     last = _events(path)[-1]
@@ -168,3 +171,58 @@ def test_should_cut_long_error_text_when_it_passes_the_limit():
 
     assert len(text) == 500
     assert text.endswith("…")
+
+
+class _FullDisk:
+    def write(self, _text):
+        raise OSError(28, "No space left on device")
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def _full_disk_generator(tmp_path: Path) -> tuple[TemporaryProgressGenerator, TemporaryGenerateProgress]:
+    with patch.object(Path, "open", return_value=_FullDisk()):
+        progress = TemporaryGenerateProgress(str(tmp_path / "progress.jsonl"))
+    return TemporaryProgressGenerator(progress, input_type=str, output_type=str), progress
+
+
+@pytest.mark.asyncio
+async def test_should_write_every_case_once_when_the_progress_file_cannot_be_written(tmp_path: Path, caplog):
+    generator, progress = _full_disk_generator(tmp_path)
+
+    with caplog.at_level(logging.WARNING), patch(AGENT, _CaseAgent):
+        cases = await asyncio.wait_for(generator.generate_cases_async("Write refund cases.", num_cases=3), timeout=5)
+    progress.failed(RuntimeError("late failure"))
+    progress.close()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(cases) == 3
+    assert not any("Error generating case" in message for message in messages)
+    assert [message for message in messages if "progress file" in message] == [
+        "Stopped writing the generate progress file: OSError: [Errno 28] No space left on device"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_should_not_hang_when_neither_the_agent_nor_the_progress_file_works(tmp_path: Path):
+    generator, progress = _full_disk_generator(tmp_path)
+
+    with patch(AGENT, side_effect=ValueError("unknown model id")):
+        cases = await asyncio.wait_for(generator.generate_cases_async("Write refund cases.", num_cases=4), timeout=5)
+    progress.close()
+
+    assert cases == []
+
+
+def test_should_write_valid_json_when_an_error_holds_a_lone_surrogate(tmp_path: Path):
+    path = tmp_path / "progress.jsonl"
+    progress = TemporaryGenerateProgress(str(path))
+
+    progress.case_failed(RuntimeError("bad byte \udc80"))
+    progress.close()
+
+    assert _events(path)[0]["error"] == "RuntimeError: bad byte \udc80"

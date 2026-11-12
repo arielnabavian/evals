@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -107,6 +108,7 @@ class _SchemaAgent:
         pass
 
     async def structured_output_async(self, output_model, _prompt):
+        await asyncio.sleep(0)
         values = {
             "name": "refund",
             "input": "Refund order 2001",
