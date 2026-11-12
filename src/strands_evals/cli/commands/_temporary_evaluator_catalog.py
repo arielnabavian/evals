@@ -48,6 +48,9 @@ class TemporaryEvaluatorKind(str, Enum):
     CHAOS = "chaos"
 
 
+TEMPORARY_DEV_LANGUAGES: dict[str, str] = {"python": "Python", "typescript": "TypeScript"}
+
+
 class TemporaryRunData(str, Enum):
     OUTPUT = "output"
     TRACE = "trace"
@@ -63,7 +66,7 @@ class _DevSupport:
 
 
 _DEV_SUPPORT: dict[TemporaryRunData, _DevSupport] = {
-    TemporaryRunData.OUTPUT: _DevSupport(("python", "typescript")),
+    TemporaryRunData.OUTPUT: _DevSupport(tuple(TEMPORARY_DEV_LANGUAGES)),
     TemporaryRunData.TRACE: _DevSupport(
         ("python",), "It reads the agent trace, and strands dev records a trace only for Python agents."
     ),
@@ -123,6 +126,10 @@ class TemporaryEvaluatorEntry:
     @property
     def required_settings(self) -> tuple[str, ...]:
         return tuple(setting.name for setting in self.settings if setting.required)
+
+    def dev_limit(self, language: str) -> str | None:
+        support = _DEV_SUPPORT[self.reads]
+        return None if language in support.agents else support.limit
 
     def to_dict(self) -> dict[str, Any]:
         support = _DEV_SUPPORT[self.reads]

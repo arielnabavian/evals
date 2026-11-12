@@ -265,3 +265,57 @@ def test_should_reject_the_evaluator_before_any_generation_when_its_spec_is_inva
     assert exited.value.code == 2
     assert message in capsys.readouterr().err
     from_context.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("language", "spec", "message"),
+    [
+        ("typescript", "HelpfulnessEvaluator", "HelpfulnessEvaluator cannot score a TypeScript agent in strands dev"),
+        ("typescript", '{"evaluator_type": "ToolCalled", "tool_name": "search"}', "only for Python agents"),
+        ("python", "InteractionsEvaluator", "InteractionsEvaluator cannot score a Python agent in strands dev"),
+        ("python", '{"evaluator_type": "StateEquals", "name": "cart"}', "do not record it"),
+    ],
+)
+def test_should_reject_the_evaluator_when_a_strands_dev_run_of_the_agent_cannot_give_it_data(
+    capsys, language, spec, message
+):
+    from_context = _cases_only()
+
+    with patch(FROM_CONTEXT, new=from_context):
+        exit_code = main(
+            ["generate", "--context", "ctx", "--temporary-agent-language", language, f"--evaluator={spec}"]
+        )
+
+    assert exit_code == 2
+    assert message in capsys.readouterr().err
+    from_context.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("language", "spec"),
+    [
+        ("typescript", "OutputEvaluator"),
+        ("typescript", '{"evaluator_type": "Contains", "value": "refund"}'),
+        ("python", "HelpfulnessEvaluator"),
+        ("python", '{"evaluator_type": "ToolCalled", "tool_name": "search"}'),
+    ],
+)
+def test_should_accept_the_evaluator_when_a_strands_dev_run_of_the_agent_gives_it_data(tmp_path: Path, language, spec):
+    output = tmp_path / "experiment.json"
+
+    with patch(FROM_CONTEXT, new=_cases_only()), patch(CONSTRUCT, new=_written_rubric()):
+        exit_code = main(
+            [
+                "generate",
+                "--context",
+                "ctx",
+                "--temporary-agent-language",
+                language,
+                f"--evaluator={spec}",
+                "-o",
+                str(output),
+            ]
+        )
+
+    assert exit_code == 0
+    assert len(json.loads(output.read_text())["evaluators"]) == 1
