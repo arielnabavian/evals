@@ -11,6 +11,7 @@ from .commands import fetch as fetch_cmd
 from .commands import generate as generate_cmd
 from .commands import report as report_cmd
 from .commands import run as run_cmd
+from .commands import temporary_evaluators as temporary_evaluators_cmd
 from .commands import validate as validate_cmd
 
 
@@ -31,6 +32,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_cmd.add_subparser(subparsers, parent)
     generate_cmd.add_subparser(subparsers, parent)
     fetch_cmd.add_subparser(subparsers, parent)
+    temporary_evaluators_cmd.add_subparser(subparsers, parent)
 
     return parser
 

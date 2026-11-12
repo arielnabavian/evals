@@ -11,6 +11,7 @@ import pytest
 from strands_evals.case import Case
 from strands_evals.cli.main import main
 from strands_evals.evaluators.output_evaluator import OutputEvaluator
+from strands_evals.evaluators.trajectory_evaluator import TrajectoryEvaluator
 from strands_evals.experiment import Experiment
 
 
@@ -37,10 +38,14 @@ def test_generate_writes_to_stdout(tmp_path: Path, capsys):
 
 def test_generate_writes_to_file_via_to_file(tmp_path: Path, capsys):
     out_path = tmp_path / "experiment.json"
-    fake = AsyncMock(return_value=_experiment_with(num_cases=1, evaluator=True))
-    with patch(
-        "strands_evals.cli.commands.generate.ExperimentGenerator.from_context_async",
-        new=fake,
+    fake = AsyncMock(return_value=_experiment_with(num_cases=1))
+    rubric = AsyncMock(return_value=OutputEvaluator(rubric="generated rubric"))
+    with (
+        patch(
+            "strands_evals.cli.commands.generate.ExperimentGenerator.from_context_async",
+            new=fake,
+        ),
+        patch("strands_evals.cli.commands.generate.ExperimentGenerator.construct_evaluator_async", new=rubric),
     ):
         exit_code = main(
             [
@@ -81,10 +86,14 @@ def test_generate_to_file_appends_json_extension(tmp_path: Path):
 
 
 def test_generate_passes_through_args(capsys):
-    fake = AsyncMock(return_value=_experiment_with(num_cases=2, evaluator=True))
-    with patch(
-        "strands_evals.cli.commands.generate.ExperimentGenerator.from_context_async",
-        new=fake,
+    fake = AsyncMock(return_value=_experiment_with(num_cases=2))
+    rubric = AsyncMock(return_value=TrajectoryEvaluator(rubric="generated rubric"))
+    with (
+        patch(
+            "strands_evals.cli.commands.generate.ExperimentGenerator.from_context_async",
+            new=fake,
+        ),
+        patch("strands_evals.cli.commands.generate.ExperimentGenerator.construct_evaluator_async", new=rubric),
     ):
         exit_code = main(
             [
@@ -107,7 +116,7 @@ def test_generate_passes_through_args(capsys):
     assert exit_code == 0
     kwargs = dict(fake.await_args.kwargs)
     # The class object is passed; assert by name to avoid importing it again.
-    assert kwargs.pop("evaluator").__name__ == "TrajectoryEvaluator"
+    assert rubric.await_args.kwargs["evaluator"].__name__ == "TrajectoryEvaluator"
     assert kwargs == {
         "context": "ctx",
         "num_cases": 2,
