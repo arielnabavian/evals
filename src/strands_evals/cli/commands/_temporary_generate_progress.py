@@ -28,6 +28,7 @@ class TemporaryGenerateProgress:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         self._stream = target.open("w", encoding="utf-8")
+        self._writable = True
         self._total = 0
         self._done = 0
         self._failed = 0
@@ -54,14 +55,27 @@ class TemporaryGenerateProgress:
         self._write({"event": "failed", "error": temporary_error_text(error)})
 
     def close(self) -> None:
-        self._stream.close()
+        try:
+            self._stream.close()
+        except (OSError, ValueError) as error:
+            self._stop_writing(error)
 
     def _case_event(self, ok: bool) -> dict[str, Any]:
         return {"event": "case", "ok": ok, "done": self._done, "failed": self._failed, "total": self._total}
 
     def _write(self, event: dict[str, Any]) -> None:
-        self._stream.write(f"{json.dumps(event, ensure_ascii=False)}\n")
-        self._stream.flush()
+        if not self._writable:
+            return
+        try:
+            self._stream.write(f"{json.dumps(event)}\n")
+            self._stream.flush()
+        except (OSError, ValueError) as error:
+            self._stop_writing(error)
+
+    def _stop_writing(self, error: BaseException) -> None:
+        if self._writable:
+            logger.warning("Stopped writing the generate progress file: %s", temporary_error_text(error))
+        self._writable = False
 
 
 class TemporaryProgressGenerator(ExperimentGenerator[str, str]):
