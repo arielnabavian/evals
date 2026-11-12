@@ -8,25 +8,15 @@ import json
 import sys
 from typing import Any
 
-from ...evaluators import InteractionsEvaluator, OutputEvaluator, TrajectoryEvaluator
 from ...evaluators.evaluator import Evaluator
 from ...experiment import Experiment
 from ...generators import ExperimentGenerator
 from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error
 from .._entrypoint import resolve_custom_evaluators
 from .._io import write_text_output
+from ._temporary_evaluator_catalog import TemporaryEvaluatorChoice, temporary_evaluator_choice
 from ._temporary_generate_progress import TemporaryGenerateProgress, TemporaryProgressGenerator
 from .temporary_optimize import _count
-
-# `ExperimentGenerator.construct_evaluator_async` only supports these three.
-# The CLI restricts `--evaluator` to the same set so users get a fast,
-# CLI-flavored error instead of a deep ValueError from the generator listing
-# raw class objects.
-_GENERATOR_EVALUATORS: dict[str, type[Evaluator]] = {
-    "OutputEvaluator": OutputEvaluator,
-    "TrajectoryEvaluator": TrajectoryEvaluator,
-    "InteractionsEvaluator": InteractionsEvaluator,
-}
 
 
 def _validate_args(args: argparse.Namespace) -> str | None:
@@ -54,7 +44,19 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return "--extra-information requires --experiment."
         if args.custom_evaluator:
             return "--custom-evaluator requires --experiment."
+        return _repeated_evaluator_error(args.evaluator or [])
     return None
+
+
+def _repeated_evaluator_error(choices: list[TemporaryEvaluatorChoice]) -> str | None:
+    labels = [choice.label for choice in choices]
+    repeated = sorted({label for label in labels if labels.count(label) > 1})
+    if not repeated:
+        return None
+    return (
+        f"--evaluator {', '.join(repeated)} is set more than one time. "
+        'Give each copy a different "name" setting, or remove the copies.'
+    )
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -104,16 +106,7 @@ def _generate(args: argparse.Namespace, generator: ExperimentGenerator[str, str]
             )
         )
     else:
-        evaluator_cls = _GENERATOR_EVALUATORS[args.evaluator] if args.evaluator else None
-        experiment = asyncio.run(
-            generator.from_context_async(
-                context=args.context,
-                task_description=args.task_description or "",
-                num_cases=args.num_cases,
-                evaluator=evaluator_cls,
-                num_topics=args.num_topics,
-            )
-        )
+        experiment = asyncio.run(_from_context(args, generator, args.evaluator or []))
 
     if args.output is not None:
         # `experiment.to_file` enforces a `.json` extension and writes via
@@ -128,6 +121,34 @@ def _generate(args: argparse.Namespace, generator: ExperimentGenerator[str, str]
         file=sys.stderr,
     )
     return EXIT_OK
+
+
+async def _from_context(
+    args: argparse.Namespace,
+    generator: ExperimentGenerator[str, str],
+    choices: list[TemporaryEvaluatorChoice],
+) -> Experiment:
+    task_description = args.task_description or ""
+    experiment = await generator.from_context_async(
+        context=args.context,
+        task_description=task_description,
+        num_cases=args.num_cases,
+        num_topics=args.num_topics,
+    )
+    if not choices:
+        return experiment
+    rubric_prompt = f"Create a rubric with the following context: {args.context} for this task: {task_description} "
+    evaluators = await asyncio.gather(*(_evaluator(generator, choice, rubric_prompt) for choice in choices))
+    return Experiment(cases=experiment.cases, evaluators=list(evaluators))
+
+
+async def _evaluator(
+    generator: ExperimentGenerator[str, str], choice: TemporaryEvaluatorChoice, rubric_prompt: str
+) -> Evaluator:
+    if not choice.needs_rubric:
+        return choice.build()
+    written = await generator.construct_evaluator_async(prompt=rubric_prompt, evaluator=choice.entry.evaluator)
+    return choice.build(rubric=written.rubric)
 
 
 def add_subparser(
@@ -191,12 +212,15 @@ def add_subparser(
     )
     parser.add_argument(
         "--evaluator",
-        metavar="NAME",
-        choices=sorted(_GENERATOR_EVALUATORS),
+        metavar="NAME|JSON",
+        type=temporary_evaluator_choice,
+        action="append",
         default=None,
         help=(
-            "--context only: default evaluator to attach with a generated rubric. "
-            f"Choices: {', '.join(sorted(_GENERATOR_EVALUATORS))}. "
+            "--context only, repeatable (TEMPORARY): an evaluator to attach. Give its name, for example "
+            'HelpfulnessEvaluator, or a JSON object with its settings, for example {"evaluator_type": '
+            '"ToolCalled", "tool_name": "search"}. Rubric judges get a rubric written from the context. '
+            "Run strands-evals evaluators to see every evaluator. "
             "Omit to produce an experiment with a placeholder Evaluator."
         ),
     )
