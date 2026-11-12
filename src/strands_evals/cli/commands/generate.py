@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from typing import Any
 
 from ...evaluators import InteractionsEvaluator, OutputEvaluator, TrajectoryEvaluator
 from ...evaluators.evaluator import Evaluator
@@ -15,6 +16,7 @@ from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error
 from .._entrypoint import resolve_custom_evaluators
 from .._io import write_text_output
 from ._temporary_generate_progress import TemporaryGenerateProgress, TemporaryProgressGenerator
+from .temporary_optimize import _count
 
 # `ExperimentGenerator.construct_evaluator_async` only supports these three.
 # The CLI restricts `--evaluator` to the same set so users get a fast,
@@ -61,16 +63,32 @@ def _run(args: argparse.Namespace) -> int:
         emit_error(error)
         return EXIT_BAD_INPUT
 
+    options = _generator_options(args)
     if args.temporary_progress is None:
-        return _generate(args, ExperimentGenerator(input_type=str, output_type=str, model=args.model))
+        return _generate(args, ExperimentGenerator(**options))
     progress = TemporaryGenerateProgress(args.temporary_progress)
     try:
-        return _generate(args, TemporaryProgressGenerator(progress, input_type=str, output_type=str, model=args.model))
+        return _generate(args, TemporaryProgressGenerator(progress, **options))
     except Exception as failure:
         progress.failed(failure)
         raise
     finally:
         progress.close()
+
+
+def _generator_options(args: argparse.Namespace) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "input_type": str,
+        "output_type": str,
+        "model": args.model,
+        "include_expected_output": args.include_expected_output,
+        "include_expected_trajectory": args.include_expected_trajectory,
+        "include_expected_interactions": args.include_expected_interactions,
+        "include_metadata": args.include_metadata,
+    }
+    if args.max_parallel_num_cases is not None:
+        options["max_parallel_num_cases"] = args.max_parallel_num_cases
+    return options
 
 
 def _generate(args: argparse.Namespace, generator: ExperimentGenerator[str, str]) -> int:
@@ -203,6 +221,37 @@ def add_subparser(
         metavar="MODEL_ID",
         default=None,
         help="override the judge model used by the generator",
+    )
+    parser.add_argument(
+        "--max-parallel-num-cases",
+        metavar="N",
+        type=_count(1),
+        default=None,
+        help="TEMPORARY: generate at most N cases at the same time (max_parallel_num_cases, default: 10)",
+    )
+    parser.add_argument(
+        "--no-expected-output",
+        dest="include_expected_output",
+        action="store_false",
+        help="TEMPORARY: generate cases without an expected output (include_expected_output=False)",
+    )
+    parser.add_argument(
+        "--expected-trajectory",
+        dest="include_expected_trajectory",
+        action="store_true",
+        help="TEMPORARY: also generate the expected tool trajectory of each case (include_expected_trajectory)",
+    )
+    parser.add_argument(
+        "--expected-interactions",
+        dest="include_expected_interactions",
+        action="store_true",
+        help="TEMPORARY: also generate the expected interactions of each case (include_expected_interactions)",
+    )
+    parser.add_argument(
+        "--metadata",
+        dest="include_metadata",
+        action="store_true",
+        help="TEMPORARY: also generate metadata for each case (include_metadata)",
     )
     parser.add_argument(
         "--temporary-progress",
