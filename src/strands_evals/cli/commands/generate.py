@@ -14,7 +14,11 @@ from ...generators import ExperimentGenerator
 from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error
 from .._entrypoint import resolve_custom_evaluators
 from .._io import write_text_output
-from ._temporary_evaluator_catalog import TemporaryEvaluatorChoice, temporary_evaluator_choice
+from ._temporary_evaluator_catalog import (
+    TEMPORARY_DEV_LANGUAGES,
+    TemporaryEvaluatorChoice,
+    temporary_evaluator_choice,
+)
 from ._temporary_generate_progress import TemporaryGenerateProgress, TemporaryProgressGenerator
 from .temporary_optimize import _count
 
@@ -44,8 +48,21 @@ def _validate_args(args: argparse.Namespace) -> str | None:
             return "--extra-information requires --experiment."
         if args.custom_evaluator:
             return "--custom-evaluator requires --experiment."
-        return _repeated_evaluator_error(args.evaluator or [])
+        choices = args.evaluator or []
+        return _repeated_evaluator_error(choices) or _agent_language_error(choices, args.temporary_agent_language)
     return None
+
+
+def _agent_language_error(choices: list[TemporaryEvaluatorChoice], language: str | None) -> str | None:
+    if language is None:
+        return None
+    agent = TEMPORARY_DEV_LANGUAGES[language]
+    reasons = [
+        f"{choice.entry.name} cannot score a {agent} agent in strands dev. {limit}"
+        for choice in choices
+        if (limit := choice.entry.dev_limit(language))
+    ]
+    return " ".join(reasons) or None
 
 
 def _repeated_evaluator_error(choices: list[TemporaryEvaluatorChoice]) -> str | None:
@@ -276,6 +293,15 @@ def add_subparser(
         dest="include_metadata",
         action="store_true",
         help="TEMPORARY: also generate metadata for each case (include_metadata)",
+    )
+    parser.add_argument(
+        "--temporary-agent-language",
+        choices=sorted(TEMPORARY_DEV_LANGUAGES),
+        default=None,
+        help=(
+            "TEMPORARY: the language of the strands dev agent that the experiment is for. generate rejects "
+            "an evaluator that a strands dev run of that agent cannot give data to"
+        ),
     )
     parser.add_argument(
         "--temporary-progress",
