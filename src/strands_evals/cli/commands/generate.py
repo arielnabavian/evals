@@ -14,6 +14,7 @@ from ...generators import ExperimentGenerator
 from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error
 from .._entrypoint import resolve_custom_evaluators
 from .._io import write_text_output
+from ._temporary_generate_progress import TemporaryGenerateProgress, TemporaryProgressGenerator
 
 # `ExperimentGenerator.construct_evaluator_async` only supports these three.
 # The CLI restricts `--evaluator` to the same set so users get a fast,
@@ -60,8 +61,19 @@ def _run(args: argparse.Namespace) -> int:
         emit_error(error)
         return EXIT_BAD_INPUT
 
-    generator: ExperimentGenerator[str, str] = ExperimentGenerator(input_type=str, output_type=str, model=args.model)
+    if args.temporary_progress is None:
+        return _generate(args, ExperimentGenerator(input_type=str, output_type=str, model=args.model))
+    progress = TemporaryGenerateProgress(args.temporary_progress)
+    try:
+        return _generate(args, TemporaryProgressGenerator(progress, input_type=str, output_type=str, model=args.model))
+    except Exception as failure:
+        progress.failed(failure)
+        raise
+    finally:
+        progress.close()
 
+
+def _generate(args: argparse.Namespace, generator: ExperimentGenerator[str, str]) -> int:
     if args.experiment is not None:
         custom_evaluators = resolve_custom_evaluators(args.custom_evaluator or [])
         source = Experiment.from_file(args.experiment, custom_evaluators=custom_evaluators)
@@ -191,6 +203,15 @@ def add_subparser(
         metavar="MODEL_ID",
         default=None,
         help="override the judge model used by the generator",
+    )
+    parser.add_argument(
+        "--temporary-progress",
+        metavar="PATH",
+        default=None,
+        help=(
+            "TEMPORARY: write one JSON line to PATH when topic planning, case generation, or rubric "
+            "generation starts, when each case is written or fails, and when the command fails"
+        ),
     )
     parser.add_argument(
         "-o",
