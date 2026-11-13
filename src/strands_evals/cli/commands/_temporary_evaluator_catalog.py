@@ -57,6 +57,7 @@ class TemporaryRunData(str, Enum):
     INTERACTIONS = "interactions"
     ENVIRONMENT_STATE = "environment_state"
     INJECTED_FAILURES = "injected_failures"
+    IMAGE = "image"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,9 @@ _DEV_SUPPORT: dict[TemporaryRunData, _DevSupport] = {
     ),
     TemporaryRunData.INJECTED_FAILURES: _DevSupport(
         (), "It needs a chaos experiment that injects tool failures, and strands dev cannot run one yet."
+    ),
+    TemporaryRunData.IMAGE: _DevSupport(
+        (), "Its rubric scores what an image in the case shows, and strands dev cases carry text only."
     ),
 }
 
@@ -202,7 +206,8 @@ TEMPORARY_EVALUATOR_CATALOG: tuple[TemporaryEvaluatorEntry, ...] = (
         FaithfulnessEvaluator,
         _JUDGE,
         _TRACE,
-        "Scores how well the conversation and the tool results support the claims in the answer.",
+        "Scores how much of the answer conflicts with the conversation and the tool results. "
+        "No conflict gets the top score.",
     ),
     _entry(
         ResponseRelevanceEvaluator, _JUDGE, _TRACE, "Scores how well the answer addresses the question of the user."
@@ -251,25 +256,25 @@ TEMPORARY_EVALUATOR_CATALOG: tuple[TemporaryEvaluatorEntry, ...] = (
     _entry(
         MultimodalCorrectnessEvaluator,
         _MULTIMODAL,
-        _OUTPUT,
+        TemporaryRunData.IMAGE,
         "Scores whether an answer about an image is accurate and complete.",
     ),
     _entry(
         MultimodalFaithfulnessEvaluator,
         _MULTIMODAL,
-        _OUTPUT,
+        TemporaryRunData.IMAGE,
         "Scores whether an answer about an image uses only what the image shows.",
     ),
     _entry(
         MultimodalInstructionFollowingEvaluator,
         _MULTIMODAL,
-        _OUTPUT,
+        TemporaryRunData.IMAGE,
         "Scores whether an answer about an image obeys the requirements and limits of the query.",
     ),
     _entry(
         MultimodalOverallQualityEvaluator,
         _MULTIMODAL,
-        _OUTPUT,
+        TemporaryRunData.IMAGE,
         "Scores an answer about an image for accuracy, instruction following, completeness, and coherence.",
     ),
     _entry(
@@ -278,9 +283,7 @@ TEMPORARY_EVALUATOR_CATALOG: tuple[TemporaryEvaluatorEntry, ...] = (
         _OUTPUT,
         "Passes when the answer is exactly the value that you set, or the expected output of the case.",
         TemporaryEvaluatorSetting(
-            "value",
-            "The exact answer. Without it, the check uses the expected output of each case.",
-            value_type=TemporarySettingType.ANY,
+            "value", "The exact answer. Without it, the check uses the expected output of each case."
         ),
     ),
     _entry(
@@ -425,5 +428,21 @@ def _constructor_settings(evaluator: type[Evaluator]) -> set[str]:
 def _check_construction(choice: TemporaryEvaluatorChoice) -> None:
     try:
         choice.build(rubric="" if choice.needs_rubric else None)
-    except (TypeError, ValueError) as error:
-        raise argparse.ArgumentTypeError(f"{choice.entry.name} rejected its settings: {error}") from error
+    except Exception as error:
+        raise argparse.ArgumentTypeError(
+            f"{choice.entry.name} rejected its settings: {type(error).__name__}: {error}"
+        ) from error
+
+
+def temporary_optimize_problem(evaluators: list[Evaluator]) -> str | None:
+    blocked = [
+        evaluator.get_name()
+        for evaluator in evaluators
+        if (entry := _ENTRIES.get(evaluator.get_type_name())) and entry.reads is not TemporaryRunData.OUTPUT
+    ]
+    if not blocked:
+        return None
+    return (
+        f"optimize cannot score {', '.join(blocked)}, because each trial records only the final answer of the agent. "
+        "Use an experiment whose evaluators read only the answer, for example OutputEvaluator, Contains, or Equals"
+    )

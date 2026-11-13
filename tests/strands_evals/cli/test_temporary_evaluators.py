@@ -132,6 +132,8 @@ def test_should_print_every_evaluator_as_json_when_json_is_requested(capsys):
         ("InteractionsEvaluator", [], "do not record them"),
         ("StateEquals", [], "do not record it"),
         ("RecoveryStrategyEvaluator", [], "chaos experiment"),
+        ("MultimodalCorrectnessEvaluator", [], "strands dev cases carry text only"),
+        ("MultimodalOutputEvaluator", ["python", "typescript"], None),
     ],
 )
 def test_should_say_which_strands_dev_agents_an_evaluator_can_score_when_json_is_requested(capsys, name, agents, limit):
@@ -160,6 +162,22 @@ def test_should_print_each_name_with_its_required_settings_when_text_is_requeste
     assert exit_code == 0
     assert "ToolCalled (tool_name)" in text
     assert all(entry.name in text and entry.description in text for entry in TEMPORARY_EVALUATOR_CATALOG)
+
+
+@pytest.mark.parametrize(
+    ("name", "scope"),
+    [
+        ("OutputEvaluator", ""),
+        ("HelpfulnessEvaluator", " [strands dev: Python agents only]"),
+        ("InteractionsEvaluator", " [not in strands dev]"),
+    ],
+)
+def test_should_mark_the_strands_dev_agents_of_each_evaluator_when_text_is_requested(capsys, name, scope):
+    main(["evaluators", "--rich"])
+
+    entry = next(entry for entry in TEMPORARY_EVALUATOR_CATALOG if entry.name == name)
+    line = next(line for line in capsys.readouterr().out.splitlines() if line.strip().startswith(f"{name} "))
+    assert line.endswith(f"{entry.description}{scope}")
 
 
 def test_should_attach_every_evaluator_when_several_are_given(tmp_path: Path):
@@ -252,6 +270,11 @@ def test_should_reject_two_copies_of_an_evaluator_when_they_have_the_same_name(c
         ('{"evaluator_type": "Contains", "value": "x", "tool": "y"}', "Contains does not take tool"),
         ('{"evaluator_type": "Contains", "value": "x", "case_sensitive": "no"}', "case_sensitive must be a boolean"),
         ('{"evaluator_type": "ToolCalled", "tool_name": 3}', "tool_name must be a string"),
+        ('{"evaluator_type": "Equals", "value": 42}', "value must be a string"),
+        (
+            '{"evaluator_type": "HelpfulnessEvaluator", "version": "v9"}',
+            "HelpfulnessEvaluator rejected its settings: KeyError",
+        ),
         ('{"tool_name": "search"}', 'an "evaluator_type" name'),
         ("{not json", "the evaluator JSON is not valid"),
     ],

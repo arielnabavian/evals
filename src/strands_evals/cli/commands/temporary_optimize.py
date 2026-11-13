@@ -21,6 +21,7 @@ from strands import Agent
 from ...experiment import Experiment
 from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error, resolve_format
 from .._entrypoint import EntryPointError, _import_from_path, import_attr, resolve_custom_evaluators
+from ._temporary_evaluator_catalog import temporary_optimize_problem
 from ._temporary_typescript_runner import TYPESCRIPT_SUFFIXES, load_typescript_harness
 
 logger = logging.getLogger(__name__)
@@ -366,12 +367,24 @@ def _log_to_stderr(line: str) -> None:
     print(line, file=sys.stderr)  # noqa: T201
 
 
+def temporary_answer_text(reply: Any) -> str:
+    return str(reply).rstrip("\n")
+
+
+async def _temporary_answer(agent: Any, case: Any) -> str:
+    return temporary_answer_text(await agent.invoke_async(case.input))
+
+
 def _study(args: argparse.Namespace, optimization: ModuleType) -> Any:
     custom_evaluators = resolve_custom_evaluators(args.custom_evaluator or [])
     experiment = _load_experiment(args.experiment_file, custom_evaluators)
+    problem = temporary_optimize_problem(experiment.evaluators)
+    if problem:
+        raise ValueError(problem)
     factory = _tunable_agent(args.agent, args.tune, optimization, args.typescript_runner)
     return optimization.Study(
         agent=factory,
+        task=_temporary_answer,
         experiment=experiment,
         objectives=_objectives(args.maximize, experiment, optimization),
         constraints=[optimization.AtMost(metric, limit) for metric, limit in args.at_most or []],

@@ -459,3 +459,42 @@ def test_should_exit_with_bad_input_when_a_flag_is_invalid(tmp_path, flags):
         optimize(str(experiment), "--agent", "agent.py", "--record", str(tmp_path / "record"), *flags)
 
     assert raised.value.code == 2
+
+
+@pytest.mark.parametrize(
+    ("evaluator", "named"),
+    [
+        ({"evaluator_type": "HelpfulnessEvaluator"}, "HelpfulnessEvaluator"),
+        ({"evaluator_type": "ToolCalled", "tool_name": "search"}, "ToolCalled"),
+        ({"evaluator_type": "TrajectoryEvaluator", "rubric": "r"}, "TrajectoryEvaluator"),
+    ],
+)
+def test_should_refuse_the_experiment_when_an_evaluator_reads_more_than_the_answer(
+    harness, tmp_path, capsys, evaluator, named
+):
+    experiment = tmp_path / "experiment.json"
+    experiment.write_text(json.dumps({"cases": [{"name": "c0", "input": "q0"}], "evaluators": [evaluator]}))
+    agent = write_harness(tmp_path, DIRECT_HARNESS)
+
+    code = optimize(str(experiment), "--agent", str(agent), "--record", str(tmp_path / "record"))
+
+    assert code == 2
+    assert f"optimize cannot score {named}, because each trial records only the final answer" in capsys.readouterr().err
+    assert harness.calls == []
+
+
+def test_should_score_the_answer_without_its_trailing_newline_when_a_trial_runs(harness, tmp_path):
+    code = optimize_harness(
+        tmp_path,
+        DIRECT_HARNESS,
+        "--tune",
+        "effort",
+        "--iterations",
+        "0",
+        "--no-split",
+        evaluators=[Equals(value="effort low")],
+    )
+
+    baseline = next(event for event in read_record(tmp_path) if event["type"] == "candidate")
+    assert code == 0
+    assert [(trial["output"], trial["metrics"]["Equals"]) for trial in baseline["trials"]] == [("effort low", 1.0)] * 2
