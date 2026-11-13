@@ -6,6 +6,7 @@ import json
 from .._common import EXIT_OK, resolve_format
 from .._io import write_text_output
 from ._temporary_evaluator_catalog import (
+    TEMPORARY_DEV_LANGUAGES,
     TEMPORARY_EVALUATOR_CATALOG,
     TemporaryEvaluatorEntry,
     TemporaryEvaluatorKind,
@@ -42,16 +43,24 @@ def _catalog_text() -> str:
         "\n".join(
             [
                 _KIND_HEADINGS[kind],
-                *(
-                    f"  {_entry_title(entry).ljust(width)}  {entry.description}"
-                    for entry in TEMPORARY_EVALUATOR_CATALOG
-                    if entry.kind is kind
-                ),
+                *(_entry_line(entry, width) for entry in TEMPORARY_EVALUATOR_CATALOG if entry.kind is kind),
             ]
         )
         for kind in TemporaryEvaluatorKind
     ]
     return "\n\n".join([*sections, _SETTINGS_HINT])
+
+
+def _entry_line(entry: TemporaryEvaluatorEntry, width: int) -> str:
+    languages = [label for language, label in TEMPORARY_DEV_LANGUAGES.items() if entry.dev_limit(language) is None]
+    scope = (
+        ""
+        if len(languages) == len(TEMPORARY_DEV_LANGUAGES)
+        else f" [strands dev: {' and '.join(languages)} agents only]"
+        if languages
+        else " [not in strands dev]"
+    )
+    return f"  {_entry_title(entry).ljust(width)}  {entry.description}{scope}"
 
 
 def _entry_title(entry: TemporaryEvaluatorEntry) -> str:
