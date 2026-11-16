@@ -28,9 +28,13 @@ from ...evaluators import (
     OutputEvaluator,
     RefusalEvaluator,
     ResponseRelevanceEvaluator,
+    SkillInstructionFollowingEvaluator,
+    SkillInvoked,
+    SkillSelectionAccuracyEvaluator,
     StartsWith,
     StateEquals,
     StereotypingEvaluator,
+    StructuredOutputSimilarity,
     ToolCalled,
     ToolParameterAccuracyEvaluator,
     ToolSelectionAccuracyEvaluator,
@@ -58,6 +62,7 @@ class TemporaryRunData(str, Enum):
     ENVIRONMENT_STATE = "environment_state"
     INJECTED_FAILURES = "injected_failures"
     IMAGE = "image"
+    STRUCTURED_OUTPUT = "structured_output"
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,9 @@ _DEV_SUPPORT: dict[TemporaryRunData, _DevSupport] = {
     ),
     TemporaryRunData.IMAGE: _DevSupport(
         (), "Its rubric scores what an image in the case shows, and strands dev cases carry text only."
+    ),
+    TemporaryRunData.STRUCTURED_OUTPUT: _DevSupport(
+        (), "It compares structured output field by field, and strands dev runs record only the text answer."
     ),
 }
 
@@ -308,6 +316,34 @@ TEMPORARY_EVALUATOR_CATALOG: tuple[TemporaryEvaluatorEntry, ...] = (
         _TRACE,
         "Passes when the agent calls the tool that you name.",
         TemporaryEvaluatorSetting("tool_name", "The name of the tool that the agent must call.", required=True),
+    ),
+    _entry(
+        SkillInvoked,
+        _CHECK,
+        _TRACE,
+        "Passes when the agent loads the skill that you name.",
+        TemporaryEvaluatorSetting("skill_name", "The name of the skill that the agent must load.", required=True),
+    ),
+    _entry(
+        StructuredOutputSimilarity,
+        _CHECK,
+        TemporaryRunData.STRUCTURED_OUTPUT,
+        "Scores the structured output of the agent against the expected output, field by field.",
+        TemporaryEvaluatorSetting(
+            "model_cls", "The dotted path of the Pydantic model that the agent returns.", required=True
+        ),
+    ),
+    _entry(
+        SkillSelectionAccuracyEvaluator,
+        _JUDGE,
+        _TRACE,
+        "Scores whether each skill that the agent loads is a good choice for the task.",
+    ),
+    _entry(
+        SkillInstructionFollowingEvaluator,
+        _JUDGE,
+        _TRACE,
+        "Scores how closely the agent follows the steps of each skill that it loads.",
     ),
     _entry(
         StateEquals,

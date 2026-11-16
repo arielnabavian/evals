@@ -16,16 +16,29 @@ from strands_evals.cli.commands._temporary_evaluator_catalog import (
     temporary_evaluator_choice,
 )
 from strands_evals.cli.main import main
-from strands_evals.evaluators import OutputEvaluator, TrajectoryEvaluator
+from strands_evals.evaluators import Evaluator, OutputEvaluator, TrajectoryEvaluator
 from strands_evals.experiment import Experiment
 
 FROM_CONTEXT = "strands_evals.cli.commands.generate.ExperimentGenerator.from_context_async"
 CONSTRUCT = "strands_evals.cli.commands.generate.ExperimentGenerator.construct_evaluator_async"
-SAMPLE_SETTINGS = {"value": "refund", "tool_name": "lookup_order", "name": "cart", "rubric": "Score the answer."}
+SAMPLE_SETTINGS = {
+    "value": "refund",
+    "tool_name": "lookup_order",
+    "skill_name": "refund-policy",
+    "model_cls": "strands_evals.types.evaluation.EvaluationOutput",
+    "name": "cart",
+    "rubric": "Score the answer.",
+}
 
 
 def _exported_evaluator_names() -> set[str]:
-    exported = {name for name in evaluators_package.__all__ if name != "Evaluator"}
+    exported = {
+        name
+        for name in evaluators_package.__all__
+        if name != "Evaluator"
+        and isinstance(getattr(evaluators_package, name), type)
+        and issubclass(getattr(evaluators_package, name), Evaluator)
+    }
     return exported | set(chaos_package.__all__)
 
 
