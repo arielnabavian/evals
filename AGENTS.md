@@ -220,7 +220,11 @@ strands-evals/
 │   │       ├── diagnose.py
 │   │       ├── generate.py
 │   │       ├── fetch.py                      # pull Session JSON from a TraceProvider
-│   │       └── _temporary_run_harness.py     # TEMPORARY: let run take strands dev harness files
+│   │       ├── _temporary_run_harness.py     # TEMPORARY: let run take strands dev harness files
+│   │       ├── temporary_optimize.py         # TEMPORARY: run an Optimizer from the CLI, or resume one
+│   │       ├── _temporary_harness.py         # TEMPORARY: load a strands dev harness file per trial
+│   │       ├── _temporary_optimize_space.py  # TEMPORARY: read the strands dev search-space file
+│   │       └── _temporary_typescript_runner.py  # TEMPORARY: run TypeScript agents through a Node runner
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │

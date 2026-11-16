@@ -7,8 +7,8 @@ from typing import Any
 from ...case import Case
 from .._agent_task import synthesize_task_function
 from .._entrypoint import ResolvedEntryPoint
+from ._temporary_harness import load_temporary_harness_file, temporary_answer_text
 from ._temporary_typescript_runner import TYPESCRIPT_SUFFIXES, load_typescript_harness
-from .temporary_optimize import _load_harness_file, temporary_answer_text
 
 
 def temporary_harness_task(
@@ -16,7 +16,7 @@ def temporary_harness_task(
 ) -> Callable[[Case], Any] | None:
     suffix = Path(spec).suffix
     if suffix == ".py":
-        harness = _load_harness_file(spec)
+        harness = load_temporary_harness_file(spec)
         entry = ResolvedEntryPoint(kind="callable_no_arg", obj=lambda: harness.build({}), spec=spec)
         return _with_answer_text(synthesize_task_function(entry, extra_trace_attributes=trace_attributes))
     if suffix not in TYPESCRIPT_SUFFIXES:
