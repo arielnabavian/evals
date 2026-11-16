@@ -28,9 +28,10 @@ class ModelEffort:
             return "auto"
         controlled = self._controlled_keys
         current = {key: value for key, value in self._request_fields().items() if key in controlled}
-        if not current:
-            return "off"
-        return next((level for level, fields in self.fields_by_level.items() if fields == current), "auto")
+        return next(
+            (level for level, fields in self.fields_by_level.items() if level != "auto" and fields == current),
+            "auto",
+        )
 
     def options_for(self, level: str) -> dict[str, Any]:
         if level == "auto":

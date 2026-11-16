@@ -9,6 +9,7 @@ import pytest
 from strands import Agent
 
 from strands_evals.case import Case
+from strands_evals.cli.commands._temporary_model_effort import ModelEffort
 from strands_evals.cli.commands.temporary_optimize import _load_harness_file
 from strands_evals.cli.main import main
 from strands_evals.evaluators.deterministic import Contains, Equals
@@ -618,6 +619,21 @@ def test_should_start_from_the_level_of_the_model_object_when_tuning_its_effort(
 
     assert code == 0
     assert space_of(tmp_path)["effort"]["default"] == baseline
+
+
+def test_should_start_from_the_model_as_configured_when_it_has_no_reasoning_fields_and_off_sends_some():
+    model = types.SimpleNamespace(get_config=lambda: {"params": {"temperature": 0.2}})
+    effort = ModelEffort(
+        model=model,
+        config_key="params",
+        fields_by_level={
+            "auto": {"reasoning": {"effort": "medium"}},
+            "off": {"reasoning": {"effort": "none"}},
+            "low": {"reasoning": {"effort": "low"}},
+        },
+    )
+
+    assert effort.baseline == "auto"
 
 
 @pytest.mark.parametrize(("level", "budget"), [("low", 2048), ("high", 4095)])
