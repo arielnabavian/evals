@@ -12,6 +12,7 @@ import sys
 import tokenize
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol
@@ -22,13 +23,13 @@ from ...experiment import Experiment
 from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error, resolve_format
 from .._entrypoint import EntryPointError, _import_from_path, import_attr, resolve_custom_evaluators
 from ._temporary_evaluator_catalog import temporary_optimize_problem
+from ._temporary_model_effort import EFFORT_LEVELS, ModelEffort, read_model_effort
 from ._temporary_typescript_runner import TYPESCRIPT_SUFFIXES, load_typescript_harness
 
 logger = logging.getLogger(__name__)
 
 _HARNESS_SETTINGS = ("instructions", "effort")
 _DEFAULT_HARNESS_SETTINGS = ("instructions",)
-_EFFORT_LEVELS = ("auto", "off", "minimal", "low", "medium", "high", "xhigh", "max")
 _LEVELS_WITHOUT_REASONING = frozenset({"auto", "off"})
 _SHARED_STATE_OPTIONS = frozenset({"session_manager", "memory_manager", "storage"})
 _TRIAL_OVERRIDES: dict[str, Any] = {"session": False, "memory": False, "callback_handler": None}
@@ -58,6 +59,10 @@ class _Harness(Protocol):
     def build(self, values: dict[str, Any]) -> Any: ...
 
     def builds_with(self, **values: Any) -> bool: ...
+
+    def effort_unavailable(self) -> str | None: ...
+
+    def effort_baseline(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -95,8 +100,16 @@ class _HarnessFile:
     factory: Callable[..., Any]
     options: dict[str, Any]
 
+    @cached_property
+    def _model_effort(self) -> ModelEffort | None:
+        model = self.options.get("model")
+        return None if model is None or isinstance(model, str) else read_model_effort(model)
+
     def build(self, values: dict[str, Any]) -> Any:
         overrides = {**values, **_TRIAL_OVERRIDES}
+        if "effort" in overrides and self._model_effort is not None:
+            level = overrides.pop("effort")
+            overrides.update(self._model_effort.options_for(level))
         if overrides.get("instructions") == "":
             overrides["instructions"] = None
         agent = self.factory(**overrides)
@@ -113,6 +126,12 @@ class _HarnessFile:
         except ValueError:
             return False
         return True
+
+    def effort_unavailable(self) -> str | None:
+        return None if self._model_effort is None else self._model_effort.unavailable
+
+    def effort_baseline(self) -> str:
+        return self.options.get("effort", "auto") if self._model_effort is None else self._model_effort.baseline
 
 
 def _strands_harness() -> ModuleType:
@@ -260,14 +279,11 @@ def _instructions_domain(harness_file: _Harness, optimization: ModuleType) -> An
 
 
 def _effort_domain(harness_file: _Harness, optimization: ModuleType) -> Any:
-    model = harness_file.options.get("model")
-    if model is not None and not isinstance(model, str):
-        raise EntryPointError(
-            "effort cannot be tuned: the agent's model is a model object, and the harness ignores effort for model "
-            "objects. Pass the model as an id string such as bedrock/<model id>, or tune instructions (the default)."
-        )
-    baseline = harness_file.options.get("effort", "auto")
-    candidates = [level for level in _EFFORT_LEVELS if level != "auto" or baseline == "auto"]
+    reason = harness_file.effort_unavailable()
+    if reason is not None:
+        raise EntryPointError(f"effort cannot be tuned: {reason}")
+    baseline = harness_file.effort_baseline()
+    candidates = [level for level in EFFORT_LEVELS if level != "auto" or baseline == "auto"]
     levels = [level for level in candidates if level == baseline or harness_file.builds_with(effort=level)]
     if len(levels) < 2 or all(level in _LEVELS_WITHOUT_REASONING for level in levels):
         raise EntryPointError(

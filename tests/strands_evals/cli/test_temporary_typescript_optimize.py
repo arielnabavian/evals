@@ -15,6 +15,7 @@ from strands_evals.experiment import Experiment
 RUNNER = Path(__file__).parent / "fixtures" / "temporary_typescript_runner.py"
 RUNNER_COMMAND = f"{shlex.quote(sys.executable)} {shlex.quote(str(RUNNER))}"
 DESCRIPTION = {"instructions": "Answer briefly.", "effort": "low", "model": "bedrock/test"}
+MODEL_OBJECT = {**DESCRIPTION, "model": None, "model_is_instance": True}
 
 
 @pytest.fixture
@@ -91,6 +92,24 @@ def test_should_tune_effort_through_the_runner_when_given_a_typescript_agent(tmp
     assert list((tmp_path / "record" / "transcripts").iterdir())
 
 
+def test_should_tune_effort_through_the_runner_when_it_sets_effort_on_the_model_object(
+    tmp_path, monkeypatch, runner_log
+):
+    description = {**MODEL_OBJECT, "effort_unavailable": None}
+
+    code = optimize_typescript(
+        tmp_path, monkeypatch, "--tune", "effort", "--iterations", "1", "--no-split", description=description
+    )
+
+    assert code == 0
+    effort = space_of(tmp_path)["effort"]
+    assert effort["default"] == "low"
+    assert {"low", "high"} <= set(effort["choices"])
+    runs = requests_of(runner_log, "run")
+    assert runs
+    assert all(run["values"]["effort"] in effort["choices"] for run in runs)
+
+
 def test_should_send_the_file_instructions_to_each_trial_when_tuning_instructions(tmp_path, monkeypatch, runner_log):
     code = optimize_typescript(tmp_path, monkeypatch, "--iterations", "0", "--no-split")
 
@@ -114,7 +133,12 @@ def test_should_count_the_runner_usage_when_trials_finish(tmp_path, monkeypatch,
     [
         ({**DESCRIPTION, "shared_state": ["sessionManager"]}, "effort", "sessionManager"),
         ({**DESCRIPTION, "system_prompt": True}, "instructions", "Move that text into instructions"),
-        ({**DESCRIPTION, "model": None, "model_is_instance": True}, "effort", "Pass the model as an id string"),
+        (MODEL_OBJECT, "effort", "Pass the model as an id string"),
+        (
+            {**MODEL_OBJECT, "effort_unavailable": "the agent's model is a CustomModel object"},
+            "effort",
+            "effort cannot be tuned: the agent's model is a CustomModel object",
+        ),
         (
             {"error": "Cannot find module '@strands-agents/harness'"},
             "effort",
