@@ -8,6 +8,7 @@ import sys
 import tokenize
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol
@@ -15,6 +16,7 @@ from typing import Any, Protocol
 from strands import Agent
 
 from .._entrypoint import EntryPointError, _import_from_path
+from ._temporary_model_effort import ModelEffort, read_model_effort
 from ._temporary_optimize_space import TemporaryWithout, temporary_item_problem, temporary_without
 from ._temporary_typescript_runner import TYPESCRIPT_SUFFIXES, load_typescript_harness
 
@@ -31,6 +33,10 @@ class TemporaryHarness(Protocol):
     def builds_with(self, **values: Any) -> bool: ...
 
     def temporary_without_problem(self, option: str, item: dict[str, Any]) -> str | None: ...
+
+    def effort_unavailable(self) -> str | None: ...
+
+    def effort_baseline(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -68,9 +74,16 @@ class TemporaryHarnessFile:
     factory: Callable[..., Any]
     options: dict[str, Any]
 
+    @cached_property
+    def _model_effort(self) -> ModelEffort | None:
+        model = self.options.get("model")
+        return None if model is None or isinstance(model, str) else read_model_effort(model)
+
     def build(self, values: dict[str, Any], without: TemporaryWithout | None = None) -> Any:
         kept = {option: temporary_without(self.options[option], items) for option, items in (without or {}).items()}
         overrides = {**values, **kept, **_TRIAL_OVERRIDES}
+        if "effort" in overrides and self._model_effort is not None:
+            overrides.update(self._model_effort.options_for(overrides.pop("effort")))
         if overrides.get("instructions") == "":
             overrides["instructions"] = None
         agent = self.factory(**overrides)
@@ -90,6 +103,12 @@ class TemporaryHarnessFile:
 
     def temporary_without_problem(self, option: str, item: dict[str, Any]) -> str | None:
         return temporary_item_problem(self.options, option, item)
+
+    def effort_unavailable(self) -> str | None:
+        return None if self._model_effort is None else self._model_effort.unavailable
+
+    def effort_baseline(self) -> str:
+        return self.options.get("effort", "auto") if self._model_effort is None else self._model_effort.baseline
 
 
 def _strands_harness() -> ModuleType:

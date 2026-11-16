@@ -12,6 +12,8 @@ from strands import Agent
 import strands_evals.optimization as optimization
 import strands_evals.optimization.search.blocks as search_blocks
 from strands_evals.case import Case
+from strands_evals.cli.commands._temporary_harness import load_temporary_harness_file
+from strands_evals.cli.commands._temporary_model_effort import ModelEffort
 from strands_evals.cli.main import main
 from strands_evals.evaluators.deterministic import Contains, Equals
 from strands_evals.experiment import Experiment
@@ -38,6 +40,32 @@ agent = create_agent()
 
 FACTORY = "tests.strands_evals.cli.fixtures.temporary_optimize_agents"
 SCRIPTED = "tests.strands_evals.optimization.scripted_model"
+
+CLAUDE_ON_BEDROCK = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+CONTEXT_BETA = {"anthropic_beta": ["context-1m-2025-08-07"]}
+
+
+def thinking(budget: int) -> dict:
+    return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+
+
+BEDROCK_FIELDS = {
+    "off": {},
+    "low": thinking(2048),
+    "medium": thinking(8192),
+    "high": thinking(16384),
+    "xhigh": thinking(32768),
+    "max": thinking(49152),
+}
+
+
+def bedrock_harness(**model_config) -> str:
+    return (
+        "from strands.models import BedrockModel\n"
+        "from strands_harness import create_harness\n"
+        f"agent = create_harness(model=BedrockModel(**{model_config!r}), instructions='Answer briefly.')\n"
+    )
+
 
 SPACE_HARNESS = """
 from strands_harness import create_harness
@@ -128,6 +156,21 @@ def harness(monkeypatch):
 
 
 @pytest.fixture
+def harness_models(monkeypatch):
+    models = pytest.importorskip("strands_harness.models")
+    monkeypatch.setitem(sys.modules, "strands_harness.models", models)
+    return models
+
+
+@pytest.fixture
+def model_harness(harness_models, monkeypatch):
+    fake = FakeHarness()
+    monkeypatch.setitem(sys.modules, "strands_harness", fake)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    return fake
+
+
+@pytest.fixture
 def fresh_modules():
     yield
     for name in [name for name in sys.modules if name == "desk" or name.startswith("desk.")]:
@@ -159,6 +202,10 @@ def optimize_harness(tmp_path: Path, source: str, *flags: str, cases: int = 4, e
     experiment = write_experiment(tmp_path, cases=cases, evaluators=evaluators)
     agent = write_harness(tmp_path, source)
     return optimize(str(experiment), "--agent", str(agent), "--record", str(tmp_path / "record"), *flags)
+
+
+def load_harness(tmp_path: Path, source: str):
+    return load_temporary_harness_file(str(write_harness(tmp_path, source)))
 
 
 def run_dir(tmp_path: Path) -> Path:
@@ -493,7 +540,17 @@ def test_should_tune_a_tunable_factory_when_given_module_attr(tmp_path):
             f"from strands_harness import create_harness\nfrom {SCRIPTED} import ScriptedModel\n"
             "agent = create_harness(model=ScriptedModel(['x']))\n",
             "effort",
-            "Pass the model as an id string",
+            "effort cannot be tuned: the agent's model is a ScriptedModel object, and strands dev can set effort "
+            "only on BedrockModel, AnthropicModel, and OpenAIResponsesModel objects. Tune instructions instead "
+            "(the default).",
+        ),
+        (
+            "from strands.models import BedrockModel\n"
+            "from strands_harness import create_harness\n"
+            "agent = create_harness(model=BedrockModel(model_id=None))\n",
+            "effort",
+            "effort cannot be tuned: the agent's BedrockModel has no model id, so strands dev cannot look up its "
+            "reasoning settings. Tune instructions instead (the default).",
         ),
         (
             f"from strands import Agent\nfrom {SCRIPTED} import ScriptedModel\n"
@@ -954,3 +1011,139 @@ def test_should_exit_with_bad_input_when_record_and_resume_do_not_name_one_run(t
         optimize(str(experiment), "--agent", "agent.py", *target)
 
     assert raised.value.code == 2
+
+
+def test_should_tune_effort_on_copies_of_the_model_when_the_agent_builds_a_bedrock_model(model_harness, tmp_path):
+    code = optimize_harness(
+        tmp_path, bedrock_harness(model_id=CLAUDE_ON_BEDROCK), "--tune", "effort", "--iterations", "1", "--json"
+    )
+
+    assert code == 0
+    effort = space_of(tmp_path)["effort"]
+    assert (effort["default"], effort["options"]) == ("off", ["off", "low", "medium", "high", "xhigh", "max"])
+    original, *trials = [call["model"] for call in model_harness.calls]
+    assert original.get_config().get("additional_request_fields") is None
+    assert trials and all(trial is not original for trial in trials)
+    assert all("effort" not in call for call in model_harness.calls)
+    measured = {values["effort"] for values in proposed_values(tmp_path)}
+    built = [trial.get_config()["additional_request_fields"] for trial in trials]
+    assert all(BEDROCK_FIELDS[level] in built for level in measured)
+
+
+def test_should_set_the_level_on_a_copy_and_leave_the_original_when_a_trial_tunes_effort(model_harness, tmp_path):
+    source = bedrock_harness(model_id=CLAUDE_ON_BEDROCK, additional_request_fields={**CONTEXT_BETA, **thinking(2048)})
+    harness_file = load_harness(tmp_path, source)
+
+    harness_file.build({"effort": "high"})
+    original, trial = model_harness.calls[0]["model"], model_harness.calls[-1]["model"]
+    trial.update_config(temperature=0.5)
+
+    assert trial.get_config()["additional_request_fields"] == {**CONTEXT_BETA, **thinking(16384)}
+    assert original.get_config()["additional_request_fields"] == {**CONTEXT_BETA, **thinking(2048)}
+    assert "temperature" not in original.get_config()
+    assert "effort" not in model_harness.calls[-1]
+
+
+def test_should_pass_the_model_as_configured_when_a_trial_runs_at_auto(model_harness, tmp_path):
+    harness_file = load_harness(tmp_path, bedrock_harness(model_id=CLAUDE_ON_BEDROCK))
+
+    harness_file.build({"effort": "auto"})
+
+    assert model_harness.calls[-1]["model"] is model_harness.calls[0]["model"]
+    assert "effort" not in model_harness.calls[-1]
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "baseline"),
+    [
+        (thinking(2048), "low"),
+        ({**CONTEXT_BETA, **thinking(16384)}, "high"),
+        (thinking(1000), "auto"),
+    ],
+)
+def test_should_start_from_the_level_of_the_model_object_when_tuning_its_effort(
+    model_harness, tmp_path, request_fields, baseline
+):
+    source = bedrock_harness(model_id=CLAUDE_ON_BEDROCK, additional_request_fields=request_fields)
+
+    code = optimize_harness(tmp_path, source, "--tune", "effort", "--iterations", "0")
+
+    assert code == 0
+    assert space_of(tmp_path)["effort"]["default"] == baseline
+
+
+def test_should_start_from_the_model_as_configured_when_it_has_no_reasoning_fields_and_off_sends_some():
+    model = types.SimpleNamespace(get_config=lambda: {"params": {"temperature": 0.2}})
+    effort = ModelEffort(
+        model=model,
+        config_key="params",
+        fields_by_level={
+            "auto": {"reasoning": {"effort": "medium"}},
+            "off": {"reasoning": {"effort": "none"}},
+            "low": {"reasoning": {"effort": "low"}},
+        },
+    )
+
+    assert effort.baseline == "auto"
+
+
+@pytest.mark.parametrize(("level", "budget"), [("low", 2048), ("high", 4095)])
+def test_should_keep_the_thinking_budget_under_max_tokens_when_the_model_object_sets_max_tokens(
+    model_harness, tmp_path, level, budget
+):
+    harness_file = load_harness(tmp_path, bedrock_harness(model_id=CLAUDE_ON_BEDROCK, max_tokens=4096))
+
+    harness_file.build({"effort": level})
+
+    assert model_harness.calls[-1]["model"].get_config()["additional_request_fields"] == thinking(budget)
+
+
+def test_should_name_the_first_error_when_no_reasoning_level_of_the_model_object_can_be_read(
+    model_harness, harness_models, tmp_path, monkeypatch, capsys
+):
+    def unreadable(*args, **kwargs):
+        raise RuntimeError("the credentials expired")
+
+    monkeypatch.setattr(harness_models, "resolve_model", unreadable)
+
+    code = optimize_harness(tmp_path, bedrock_harness(model_id=CLAUDE_ON_BEDROCK), "--tune", "effort")
+
+    assert code == 2
+    assert (
+        "effort cannot be tuned: strands dev could not read the reasoning settings for "
+        f"bedrock/{CLAUDE_ON_BEDROCK}: the credentials expired"
+    ) in capsys.readouterr().err
+
+
+def test_should_set_the_reasoning_params_on_a_copy_when_the_agent_builds_an_openai_responses_model(
+    model_harness, tmp_path
+):
+    pytest.importorskip("openai")
+    source = (
+        "from strands.models.openai_responses import OpenAIResponsesModel\n"
+        "from strands_harness import create_harness\n"
+        "agent = create_harness(model=OpenAIResponsesModel(model_id='gpt-5.4', params={'max_output_tokens': 500}))\n"
+    )
+    harness_file = load_harness(tmp_path, source)
+
+    harness_file.build({"effort": "low"})
+
+    assert model_harness.calls[-1]["model"].get_config()["params"] == {
+        "max_output_tokens": 500,
+        "reasoning": {"effort": "low"},
+    }
+    assert model_harness.calls[0]["model"].get_config()["params"] == {"max_output_tokens": 500}
+
+
+def test_should_reject_effort_when_the_agent_builds_a_chat_completions_openai_model(harness, tmp_path, capsys):
+    pytest.importorskip("openai")
+    source = (
+        "from strands.models.openai import OpenAIModel\n"
+        "from strands_harness import create_harness\n"
+        "agent = create_harness(model=OpenAIModel(model_id='gpt-5.4'))\n"
+    )
+
+    code = optimize_harness(tmp_path, source, "--tune", "effort")
+
+    assert code == 2
+    assert "the agent's model is a OpenAIModel object, and strands dev can set effort only" in capsys.readouterr().err

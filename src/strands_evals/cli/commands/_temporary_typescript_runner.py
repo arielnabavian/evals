@@ -21,9 +21,12 @@ from ._temporary_optimize_space import TemporaryWithout
 logger = logging.getLogger(__name__)
 
 TYPESCRIPT_SUFFIXES = frozenset({".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"})
-MODEL_INSTANCE = object()
 _SETUP_TIMEOUT_SECONDS = 300.0
 _CLOSE_TIMEOUT_SECONDS = 5.0
+_MODEL_OBJECT_IGNORES_EFFORT = (
+    "the agent's model is a model object, and the harness ignores effort for model objects. Pass the model as an id "
+    "string such as bedrock/<model id>, or tune instructions (the default)."
+)
 
 
 class RunnerGone(RuntimeError):
@@ -188,6 +191,7 @@ class _TypeScriptAgent:
 class TypeScriptHarness:
     runner: TypeScriptRunner
     options: dict[str, Any]
+    effort_unavailable_reason: str | None = None
 
     def build(self, values: dict[str, Any], without: TemporaryWithout | None = None) -> _TypeScriptAgent:
         if values.get("instructions") == "":
@@ -202,19 +206,30 @@ class TypeScriptHarness:
     def temporary_without_problem(self, option: str, item: dict[str, Any]) -> str | None:
         return None
 
+    def effort_unavailable(self) -> str | None:
+        return self.effort_unavailable_reason
+
+    def effort_baseline(self) -> str:
+        return self.options["effort"]
+
 
 def _python_options(description: dict[str, Any]) -> dict[str, Any]:
     options: dict[str, Any] = {
         "instructions": description.get("instructions"),
         "effort": description.get("effort") or "auto",
     }
-    if description.get("model_is_instance"):
-        options["model"] = MODEL_INSTANCE
-    elif description.get("model"):
+    if description.get("model") and not description.get("model_is_instance"):
         options["model"] = description["model"]
     if description.get("system_prompt"):
         options["system_prompt"] = True
     return options
+
+
+def _effort_unavailable(description: dict[str, Any]) -> str | None:
+    if "effort_unavailable" not in description:
+        return _MODEL_OBJECT_IGNORES_EFFORT if description.get("model_is_instance") else None
+    reason = description["effort_unavailable"]
+    return None if reason is None else str(reason)
 
 
 def load_typescript_harness(path_text: str, runner_command: str | None) -> TypeScriptHarness:
@@ -247,4 +262,4 @@ def load_typescript_harness(path_text: str, runner_command: str | None) -> TypeS
             f"{path_text} passes {', '.join(shared)} to createHarness(...); "
             "every trial would share it, so remove it to optimize this agent"
         )
-    return TypeScriptHarness(runner, _python_options(description))
+    return TypeScriptHarness(runner, _python_options(description), _effort_unavailable(description))

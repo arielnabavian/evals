@@ -16,6 +16,7 @@ from .._common import EXIT_BAD_INPUT, EXIT_OK, emit_error, resolve_format
 from .._entrypoint import EntryPointError, import_attr, resolve_custom_evaluators
 from ._temporary_evaluator_catalog import temporary_optimize_problem
 from ._temporary_harness import TemporaryHarness, load_temporary_harness, temporary_answer_text
+from ._temporary_model_effort import EFFORT_LEVELS
 from ._temporary_optimize_space import (
     TemporarySpace,
     TemporarySpaceVariable,
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 _HARNESS_SETTINGS = ("instructions", "effort")
 _DEFAULT_HARNESS_SETTINGS = ("instructions",)
-_EFFORT_LEVELS = ("auto", "off", "minimal", "low", "medium", "high", "xhigh", "max")
 _LEVELS_WITHOUT_REASONING = frozenset({"auto", "off"})
 _DEFAULT_ITERATIONS = 4
 _DEFAULT_SPLIT = (0.5, 0.25, 0.25)
@@ -86,14 +86,11 @@ def _instructions_marker(harness: TemporaryHarness, optimization: ModuleType) ->
 
 
 def _effort_marker(harness: TemporaryHarness, optimization: ModuleType) -> Any:
-    model = harness.options.get("model")
-    if model is not None and not isinstance(model, str):
-        raise EntryPointError(
-            "effort cannot be tuned: the agent's model is a model object, and the harness ignores effort for model "
-            "objects. Pass the model as an id string such as bedrock/<model id>, or tune instructions (the default)."
-        )
-    baseline = harness.options.get("effort", "auto")
-    candidates = [level for level in _EFFORT_LEVELS if level != "auto" or baseline == "auto"]
+    reason = harness.effort_unavailable()
+    if reason is not None:
+        raise EntryPointError(f"effort cannot be tuned: {reason}")
+    baseline = harness.effort_baseline()
+    candidates = [level for level in EFFORT_LEVELS if level != "auto" or baseline == "auto"]
     levels = [level for level in candidates if level == baseline or harness.builds_with(effort=level)]
     if len(levels) < 2 or all(level in _LEVELS_WITHOUT_REASONING for level in levels):
         raise EntryPointError(
