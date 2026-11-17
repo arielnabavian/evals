@@ -92,7 +92,14 @@ class TemporaryProgressGenerator(ExperimentGenerator[str, str]):
         self._progress.cases(sum(count for _prompt, count in prompt_specs))
         return prompt_specs
 
-    async def _case_worker(self, queue: asyncio.Queue, prompt: str, message_history: list | None, results: list):
+    async def _case_worker(
+        self,
+        queue: asyncio.Queue,
+        prompt: str,
+        message_history: list | None,
+        results: list,
+        errors: list[Exception],
+    ):
         try:
             case_generator = Agent(
                 model=self.model,
@@ -103,6 +110,7 @@ class TemporaryProgressGenerator(ExperimentGenerator[str, str]):
         except Exception as error:
             logger.exception("Could not start the case generator agent")
             self._fail_queued_cases(queue, error)
+            errors.append(error)
             return
 
         while True:
@@ -112,13 +120,16 @@ class TemporaryProgressGenerator(ExperimentGenerator[str, str]):
                 break
 
             try:
-                full_prompt = prompt + f"Ensure that the test case has a difficulty level of {difficulty}."
+                full_prompt = prompt
+                if difficulty is not None:
+                    full_prompt += f" Ensure that the test case has a difficulty level of {difficulty}."
                 gen_case = await case_generator.structured_output_async(self._Case, full_prompt)
                 results.append(Case(**gen_case.model_dump()))
                 self._progress.case_done()
             except Exception as error:
                 logger.exception(f"Error generating case: {error}")
                 self._progress.case_failed(error)
+                errors.append(error)
             finally:
                 queue.task_done()
 

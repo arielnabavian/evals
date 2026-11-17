@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import inspect
 import json
 from pathlib import Path
@@ -13,6 +14,7 @@ from strands_evals.case import Case
 from strands_evals.cli.commands._temporary_evaluator_catalog import (
     TEMPORARY_EVALUATOR_CATALOG,
     TemporaryEvaluatorKind,
+    TemporaryRunData,
     temporary_evaluator_choice,
 )
 from strands_evals.cli.main import main
@@ -100,7 +102,11 @@ def test_should_mark_every_constructor_argument_without_a_default_as_required_wh
 
 @pytest.mark.parametrize(
     "entry",
-    [entry for entry in TEMPORARY_EVALUATOR_CATALOG if entry.kind is not TemporaryEvaluatorKind.CHAOS],
+    [
+        entry
+        for entry in TEMPORARY_EVALUATOR_CATALOG
+        if entry.kind is not TemporaryEvaluatorKind.CHAOS and entry.reads is not TemporaryRunData.DECISION_MODEL
+    ],
     ids=lambda entry: entry.name,
 )
 def test_should_load_the_evaluator_from_an_experiment_file_when_generate_accepts_it(entry):
@@ -127,6 +133,13 @@ def test_should_refuse_a_chaos_evaluator_when_an_experiment_file_cannot_load_it(
         temporary_evaluator_choice(entry.name)
 
 
+def test_should_refuse_a_typed_rubric_evaluator_when_an_experiment_file_cannot_store_its_decision_model():
+    with pytest.raises(argparse.ArgumentTypeError, match="needs a decision model object"):
+        temporary_evaluator_choice(
+            '{"evaluator_type": "TypedRubricEvaluator", "questions": {}, "decision_model": null}'
+        )
+
+
 def test_should_print_every_evaluator_as_json_when_json_is_requested(capsys):
     exit_code = main(["evaluators", "--json"])
 
@@ -147,6 +160,7 @@ def test_should_print_every_evaluator_as_json_when_json_is_requested(capsys):
         ("RecoveryStrategyEvaluator", [], "chaos experiment"),
         ("MultimodalCorrectnessEvaluator", [], "strands dev cases carry text only"),
         ("MultimodalOutputEvaluator", ["python", "typescript"], None),
+        ("TypedRubricEvaluator", [], "decision model object"),
     ],
 )
 def test_should_say_which_strands_dev_agents_an_evaluator_can_score_when_json_is_requested(capsys, name, agents, limit):

@@ -39,6 +39,7 @@ from ...evaluators import (
     ToolParameterAccuracyEvaluator,
     ToolSelectionAccuracyEvaluator,
     TrajectoryEvaluator,
+    TypedRubricEvaluator,
 )
 from ...evaluators.chaos import FailureCommunicationEvaluator, PartialCompletionEvaluator, RecoveryStrategyEvaluator
 from ...evaluators.evaluator import Evaluator
@@ -63,6 +64,7 @@ class TemporaryRunData(str, Enum):
     INJECTED_FAILURES = "injected_failures"
     IMAGE = "image"
     STRUCTURED_OUTPUT = "structured_output"
+    DECISION_MODEL = "decision_model"
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,9 @@ _DEV_SUPPORT: dict[TemporaryRunData, _DevSupport] = {
     ),
     TemporaryRunData.STRUCTURED_OUTPUT: _DevSupport(
         (), "It compares structured output field by field, and strands dev runs record only the text answer."
+    ),
+    TemporaryRunData.DECISION_MODEL: _DevSupport(
+        (), "It needs a decision model object in Python code, and an experiment file cannot store one."
     ),
 }
 
@@ -359,6 +364,24 @@ TEMPORARY_EVALUATOR_CATALOG: tuple[TemporaryEvaluatorEntry, ...] = (
             value_type=TemporarySettingType.ANY,
         ),
     ),
+    TemporaryEvaluatorEntry(
+        TypedRubricEvaluator,
+        _RUBRIC,
+        TemporaryRunData.DECISION_MODEL,
+        "Scores the case against typed rubric questions with one call to a decision model.",
+        (
+            TemporaryEvaluatorSetting(
+                "questions", "The rubric questions, by id.", required=True, value_type=TemporarySettingType.ANY
+            ),
+            TemporaryEvaluatorSetting(
+                "decision_model",
+                "The decision model object that answers the rubric.",
+                required=True,
+                value_type=TemporarySettingType.ANY,
+            ),
+            _LABEL,
+        ),
+    ),
     _entry(
         FailureCommunicationEvaluator,
         _CHAOS,
@@ -411,6 +434,10 @@ def temporary_evaluator_choice(spec: str) -> TemporaryEvaluatorChoice:
         raise argparse.ArgumentTypeError(
             f"{name} is a chaos evaluator. It needs a chaos experiment that injects tool failures, "
             "and an experiment file cannot store it."
+        )
+    if entry.reads is TemporaryRunData.DECISION_MODEL:
+        raise argparse.ArgumentTypeError(
+            f"{name} needs a decision model object in Python code, and an experiment file cannot store one."
         )
     _check_settings(entry, settings)
     choice = TemporaryEvaluatorChoice(entry, settings)
