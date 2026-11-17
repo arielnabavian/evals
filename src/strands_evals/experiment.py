@@ -103,6 +103,48 @@ def _get_label_from_score(
     return "YES" if score >= 0.5 else "NO"
 
 
+def builtin_evaluator_types() -> dict[str, type[Evaluator]]:
+    """The evaluator names `from_dict` resolves without any custom evaluators passed in.
+
+    Exposed because callers that read experiment files without running them — the CLI's
+    `ui`, for one — need to say whether a written `evaluator_type` will load, and the only
+    honest answer is the registry itself rather than a second copy of the list.
+    """
+    return {
+        "Evaluator": Evaluator,
+        "OutputEvaluator": OutputEvaluator,
+        "TrajectoryEvaluator": TrajectoryEvaluator,
+        "InteractionsEvaluator": InteractionsEvaluator,
+        "CoherenceEvaluator": CoherenceEvaluator,
+        "ConcisenessEvaluator": ConcisenessEvaluator,
+        "CorrectnessEvaluator": CorrectnessEvaluator,
+        "FaithfulnessEvaluator": FaithfulnessEvaluator,
+        "GoalSuccessRateEvaluator": GoalSuccessRateEvaluator,
+        "HarmfulnessEvaluator": HarmfulnessEvaluator,
+        "HelpfulnessEvaluator": HelpfulnessEvaluator,
+        "InstructionFollowingEvaluator": InstructionFollowingEvaluator,
+        "RefusalEvaluator": RefusalEvaluator,
+        "ResponseRelevanceEvaluator": ResponseRelevanceEvaluator,
+        "SkillInstructionFollowingEvaluator": SkillInstructionFollowingEvaluator,
+        "SkillSelectionAccuracyEvaluator": SkillSelectionAccuracyEvaluator,
+        "StereotypingEvaluator": StereotypingEvaluator,
+        "ToolParameterAccuracyEvaluator": ToolParameterAccuracyEvaluator,
+        "ToolSelectionAccuracyEvaluator": ToolSelectionAccuracyEvaluator,
+        "MultimodalCorrectnessEvaluator": MultimodalCorrectnessEvaluator,
+        "MultimodalFaithfulnessEvaluator": MultimodalFaithfulnessEvaluator,
+        "MultimodalInstructionFollowingEvaluator": MultimodalInstructionFollowingEvaluator,
+        "MultimodalOutputEvaluator": MultimodalOutputEvaluator,
+        "MultimodalOverallQualityEvaluator": MultimodalOverallQualityEvaluator,
+        "Equals": Equals,
+        "Contains": Contains,
+        "StartsWith": StartsWith,
+        "StateEquals": StateEquals,
+        "StructuredOutputSimilarity": StructuredOutputSimilarity,
+        "ToolCalled": ToolCalled,
+        "SkillInvoked": SkillInvoked,
+    }
+
+
 class Experiment(Generic[InputT, OutputT, ReportT]):
     """
     An evaluation experiment containing test cases and evaluators.
@@ -820,39 +862,7 @@ class Experiment(Generic[InputT, OutputT, ReportT]):
         """
         custom_evaluators = custom_evaluators or []
         cases: list[Case] = [Case.model_validate(case_data) for case_data in data["cases"]]
-        default_evaluators: dict[str, type[Evaluator]] = {
-            "Evaluator": Evaluator,
-            "OutputEvaluator": OutputEvaluator,
-            "TrajectoryEvaluator": TrajectoryEvaluator,
-            "InteractionsEvaluator": InteractionsEvaluator,
-            "CoherenceEvaluator": CoherenceEvaluator,
-            "ConcisenessEvaluator": ConcisenessEvaluator,
-            "CorrectnessEvaluator": CorrectnessEvaluator,
-            "FaithfulnessEvaluator": FaithfulnessEvaluator,
-            "GoalSuccessRateEvaluator": GoalSuccessRateEvaluator,
-            "HarmfulnessEvaluator": HarmfulnessEvaluator,
-            "HelpfulnessEvaluator": HelpfulnessEvaluator,
-            "InstructionFollowingEvaluator": InstructionFollowingEvaluator,
-            "RefusalEvaluator": RefusalEvaluator,
-            "ResponseRelevanceEvaluator": ResponseRelevanceEvaluator,
-            "SkillInstructionFollowingEvaluator": SkillInstructionFollowingEvaluator,
-            "SkillSelectionAccuracyEvaluator": SkillSelectionAccuracyEvaluator,
-            "StereotypingEvaluator": StereotypingEvaluator,
-            "ToolParameterAccuracyEvaluator": ToolParameterAccuracyEvaluator,
-            "ToolSelectionAccuracyEvaluator": ToolSelectionAccuracyEvaluator,
-            "MultimodalCorrectnessEvaluator": MultimodalCorrectnessEvaluator,
-            "MultimodalFaithfulnessEvaluator": MultimodalFaithfulnessEvaluator,
-            "MultimodalInstructionFollowingEvaluator": MultimodalInstructionFollowingEvaluator,
-            "MultimodalOutputEvaluator": MultimodalOutputEvaluator,
-            "MultimodalOverallQualityEvaluator": MultimodalOverallQualityEvaluator,
-            "Equals": Equals,
-            "Contains": Contains,
-            "StartsWith": StartsWith,
-            "StateEquals": StateEquals,
-            "StructuredOutputSimilarity": StructuredOutputSimilarity,
-            "ToolCalled": ToolCalled,
-            "SkillInvoked": SkillInvoked,
-        }
+        default_evaluators = builtin_evaluator_types()
         all_evaluators: dict[str, type[Evaluator]] = {
             **default_evaluators,
             **{v.get_type_name(): v for v in custom_evaluators},
