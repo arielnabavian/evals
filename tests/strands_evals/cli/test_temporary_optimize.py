@@ -14,6 +14,7 @@ import strands_evals.optimization.search.blocks as search_blocks
 from strands_evals.case import Case
 from strands_evals.cli.commands._temporary_harness import load_temporary_harness_file
 from strands_evals.cli.commands._temporary_model_effort import ModelEffort
+from strands_evals.cli.commands._temporary_objective import parse_temporary_objective, temporary_objective
 from strands_evals.cli.main import main
 from strands_evals.evaluators.deterministic import Contains, Equals
 from strands_evals.experiment import Experiment
@@ -391,6 +392,149 @@ def test_should_use_the_given_goals_when_maximize_and_at_most_are_given(harness,
     assert config["constraints"] == ["tokens <= 500"]
 
 
+@pytest.mark.parametrize(
+    ("expression", "stored"),
+    [
+        ("Minimize(tokens)", "Minimize(tokens)"),
+        ('Maximize("Equals")', "Maximize(Equals)"),
+        (
+            "WeightedSum(Maximize(Contains), Minimize(tokens, scale=1000))",
+            "WeightedSum(Maximize(Contains), Minimize(tokens, scale=1000))",
+        ),
+        (
+            "Pareto(Maximize(Contains, weight=2), Minimize(seconds, scale=10))",
+            "Pareto(Maximize(Contains, weight=2), Minimize(seconds, scale=10))",
+        ),
+        (" Maximize( Equals ) ", "Maximize(Equals)"),
+    ],
+)
+def test_should_use_the_objective_in_the_api_notation_when_objective_is_given(harness, tmp_path, expression, stored):
+    evaluators = [Contains(value="effort high"), Equals(value="effort high")]
+
+    code = optimize_harness(
+        tmp_path,
+        DIRECT_HARNESS,
+        "--tune",
+        "effort",
+        "--objective",
+        expression,
+        "--iterations",
+        "0",
+        evaluators=evaluators,
+    )
+
+    assert code == 0
+    assert config_of(tmp_path)["objective"] == stored
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Maximize(Equals)",
+        "Minimize(tokens)",
+        "WeightedSum(Maximize(Contains, weight=2), Minimize(tokens, scale=1000))",
+        "Pareto(Maximize(Contains), Minimize(seconds, weight=0.5, scale=10))",
+    ],
+)
+def test_should_write_the_same_text_as_the_api_when_an_objective_is_parsed(text):
+    assert str(temporary_objective(parse_temporary_objective(text), optimization)) == text
+
+
+def test_should_keep_every_limit_when_at_least_and_at_most_are_given(harness, tmp_path):
+    evaluators = [Contains(value="effort high"), Equals(value="effort high")]
+
+    code = optimize_harness(
+        tmp_path,
+        DIRECT_HARNESS,
+        "--tune",
+        "effort",
+        "--objective",
+        "Minimize(tokens)",
+        "--at-least",
+        "Contains=0.8",
+        "--at-most",
+        "seconds=30",
+        "--iterations",
+        "0",
+        evaluators=evaluators,
+    )
+
+    assert code == 0
+    config = config_of(tmp_path)
+    assert config["objective"] == "Minimize(tokens)"
+    assert config["constraints"] == ["seconds <= 30", "Contains >= 0.8"]
+
+
+@pytest.mark.parametrize(
+    ("expression", "named"),
+    [
+        ("Maximize(Contains", "Maximize(Contains"),
+        ("Foo(Contains)", "Foo"),
+        ("Maximize(Contains, temperature=2)", "temperature"),
+        ("__import__('os').system('true')", "__import__"),
+        ("Maximize(1)", "1"),
+        ("Maximize(Contains, weight=two)", "two"),
+        ("Maximize(Contains, weight=True)", "True"),
+        ("Maximize(Contains, weight=-1)", "-1"),
+        ("Contains", "Contains"),
+        ("WeightedSum(Contains)", "Contains"),
+        ("WeightedSum(Maximize(Contains), weight=2)", "weight"),
+    ],
+)
+def test_should_exit_with_bad_input_and_name_the_bad_part_when_the_objective_is_not_in_the_api_notation(
+    tmp_path, capsys, expression, named
+):
+    experiment = write_experiment(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        optimize(
+            str(experiment), "--agent", "agent.py", "--record", str(tmp_path / "record"), "--objective", expression
+        )
+
+    assert raised.value.code == 2
+    assert named in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        (["--objective", "Maximize(Nope)"], "unknown metric 'Nope'"),
+        (["--objective", "WeightedSum(Maximize(Contains), Minimize(tokens))"], "give each a scale="),
+        (["--objective", "Maximize(Contains, weight=2)"], "drop them"),
+    ],
+)
+def test_should_exit_with_bad_input_and_the_api_reason_when_the_objective_does_not_fit_the_experiment(
+    harness, tmp_path, capsys, flags, message
+):
+    evaluators = [Contains(value="effort high"), Equals(value="effort high")]
+
+    code = optimize_harness(
+        tmp_path, DIRECT_HARNESS, "--tune", "effort", *flags, "--iterations", "0", evaluators=evaluators
+    )
+
+    assert code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_should_exit_with_bad_input_when_both_maximize_and_objective_are_given(tmp_path):
+    experiment = write_experiment(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        optimize(
+            str(experiment),
+            "--agent",
+            "agent.py",
+            "--record",
+            str(tmp_path / "record"),
+            "--maximize",
+            "Contains",
+            "--objective",
+            "Maximize(Contains)",
+        )
+
+    assert raised.value.code == 2
+
+
 def test_should_rewrite_instructions_with_the_given_model_when_rewriter_model_is_given(
     harness, tmp_path, fake_reflection
 ):
@@ -616,6 +760,7 @@ def test_should_reject_the_agent_when_module_attr_is_not_a_tunable_factory_or_ta
         ["--tune", "temperature"],
         ["--split", "0.5,0.5"],
         ["--at-most", "tokens"],
+        ["--at-least", "Contains"],
         ["--iterations", "-1"],
         ["--width", "0"],
         ["--max-rollouts", "0"],

@@ -17,6 +17,7 @@ from .._entrypoint import EntryPointError, import_attr, resolve_custom_evaluator
 from ._temporary_evaluator_catalog import temporary_optimize_problem
 from ._temporary_harness import TemporaryHarness, load_temporary_harness, temporary_answer_text
 from ._temporary_model_effort import EFFORT_LEVELS
+from ._temporary_objective import parse_temporary_objective, temporary_objective
 from ._temporary_optimize_space import (
     TemporarySpace,
     TemporarySpaceVariable,
@@ -45,7 +46,11 @@ _NEXT_STEPS = (
     ("sums to", "Fix --split so that the three shares sum to 1"),
     ("case names must be unique", "Give every case in the experiment file a unique name, then try again"),
     ("every case needs a name", "Give every case in the experiment file a unique name, then try again"),
-    ("nothing to optimize", "Add an evaluator to the experiment file, or pass --maximize METRIC"),
+    ("nothing to optimize", "Add an evaluator to the experiment file, or pass --maximize METRIC or --objective"),
+    (
+        "have no bounded range",
+        "Give each usage metric of the WeightedSum or Pareto a scale=, such as Minimize(tokens, scale=1000)",
+    ),
     ("can't cover the baseline", "Pass a larger --max-rollouts, or use an experiment with fewer cases"),
     ("unmeasured for the baseline", _BASELINE_NEXT_STEP),
     ("trial of the baseline failed", _BASELINE_NEXT_STEP),
@@ -189,7 +194,10 @@ def _search(factory: Any, args: argparse.Namespace, optimization: ModuleType) ->
     return optimization.Search(blocks) if blocks else None
 
 
-def _objective(metrics: list[str] | None, optimization: ModuleType) -> Any:
+def _objective(args: argparse.Namespace, optimization: ModuleType) -> Any:
+    if args.objective is not None:
+        return temporary_objective(args.objective, optimization)
+    metrics = args.maximize
     if not metrics:
         return None
     goals = [optimization.Maximize(name) for name in dict.fromkeys(metrics)]
@@ -221,8 +229,11 @@ def _optimizer(args: argparse.Namespace, optimization: ModuleType, resumed: Path
     factory = _tunable_agent(args, optimization)
     shared: dict[str, Any] = {
         "rollout_fn": _temporary_rollout,
-        "objective": _objective(args.maximize, optimization),
-        "constraints": [optimization.AtMost(metric, limit) for metric, limit in args.at_most or []],
+        "objective": _objective(args, optimization),
+        "constraints": [
+            *(optimization.AtMost(metric, limit) for metric, limit in args.at_most or []),
+            *(optimization.AtLeast(metric, limit) for metric, limit in args.at_least or []),
+        ],
         "search": _search(factory, args, optimization),
         "budget": optimization.Budget(max_rollouts=args.max_rollouts, max_iterations=args.iterations or None),
         "max_workers": args.max_concurrency,
@@ -309,15 +320,18 @@ def _parse_split(raw: str) -> tuple[float, float, float]:
     return train, validation, test
 
 
-def _parse_limit(raw: str) -> tuple[str, float]:
-    metric, separator, value = raw.partition("=")
-    try:
-        limit = float(value)
-    except ValueError as e:
-        raise argparse.ArgumentTypeError(f"--at-most must be METRIC=NUMBER, got '{raw}'") from e
-    if not separator or not metric:
-        raise argparse.ArgumentTypeError(f"--at-most must be METRIC=NUMBER, got '{raw}'")
-    return metric, limit
+def _limit(flag: str) -> Callable[[str], tuple[str, float]]:
+    def parse(raw: str) -> tuple[str, float]:
+        metric, separator, value = raw.partition("=")
+        try:
+            limit = float(value)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"{flag} must be METRIC=NUMBER, got '{raw}'") from e
+        if not separator or not metric:
+            raise argparse.ArgumentTypeError(f"{flag} must be METRIC=NUMBER, got '{raw}'")
+        return metric, limit
+
+    return parse
 
 
 def _count(minimum: int) -> Callable[[str], int]:
@@ -395,20 +409,40 @@ def add_subparser(
             "Pass the experiment, the agent, and the flags of the first run again"
         ),
     )
-    parser.add_argument(
+    goal = parser.add_mutually_exclusive_group()
+    goal.add_argument(
         "--maximize",
         metavar="METRIC",
         action="append",
         default=None,
         help="evaluator metric to maximize (repeatable; default: every evaluator, equally weighted)",
     )
+    goal.add_argument(
+        "--objective",
+        metavar="OBJECTIVE",
+        type=parse_temporary_objective,
+        default=None,
+        help=(
+            "the objective in the notation of the optimization API, such as Minimize(tokens) or "
+            "WeightedSum(Maximize(Helpfulness), Minimize(tokens, scale=1000)); quote a metric name that is not "
+            'a plain word, such as Maximize("refund-policy")'
+        ),
+    )
     parser.add_argument(
         "--at-most",
         metavar="METRIC=NUMBER",
         action="append",
-        type=_parse_limit,
+        type=_limit("--at-most"),
         default=None,
-        help="constraint on a metric, such as tokens=4000 (repeatable)",
+        help="upper bound on the mean of a metric, such as tokens=4000 (repeatable)",
+    )
+    parser.add_argument(
+        "--at-least",
+        metavar="METRIC=NUMBER",
+        action="append",
+        type=_limit("--at-least"),
+        default=None,
+        help="lower bound on the mean of a metric, such as Correctness=0.8 (repeatable)",
     )
     parser.add_argument(
         "--iterations",
