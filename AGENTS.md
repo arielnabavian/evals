@@ -216,6 +216,11 @@ strands-evals/
 │   │   ├── _entrypoint.py                    # `module:attr` resolver + classifier
 │   │   ├── _agent_task.py                    # synthesize_task_function (baggage-tagged)
 │   │   ├── _io.py                            # stdin/stdout/file helpers
+│   │   ├── _ui_server.py                     # loopback HTTP server behind `ui`: discovery, pairing, guarded writes
+│   │   ├── assets/                           # the `ui` page; no build step, inlined into one document when served
+│   │   │   ├── ui.html                       # markup
+│   │   │   ├── ui.css                        # Strands theme tokens and components
+│   │   │   └── ui-*.js                       # one classic script per concern, loaded in the order ui.html lists
 │   │   └── commands/                         # subcommand implementations
 │   │       ├── run.py
 │   │       ├── validate.py
@@ -227,7 +232,8 @@ strands-evals/
 │   │       ├── temporary_optimize.py         # TEMPORARY: run an Optimizer from the CLI, or resume one
 │   │       ├── _temporary_harness.py         # TEMPORARY: load a strands dev harness file per trial
 │   │       ├── _temporary_optimize_space.py  # TEMPORARY: read the strands dev search-space file
-│   │       └── _temporary_typescript_runner.py  # TEMPORARY: run TypeScript agents through a Node runner
+│   │       ├── _temporary_typescript_runner.py  # TEMPORARY: run TypeScript agents through a Node runner
+│   │       └── ui.py                         # browse and edit experiments, reports and optimizer runs
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │
@@ -270,7 +276,11 @@ strands-evals/
 │       ├── optimization/
 │       └── redteam/
 │
+├── tests/ui/                                 # jsdom suites for the `ui` page (Node, run by hand; see its README)
+│
 ├── tests_integ/                              # Integration tests (real providers)
+│
+├── examples/                                 # Sample experiments, and `make_ui_demo.py` to fill every `ui` view
 │
 ├── pyproject.toml
 ├── README.md
@@ -283,9 +293,10 @@ strands-evals/
 
 - **`.agents/skills/`**: Agent skills, one directory per skill containing a `SKILL.md`; the folder name must match the skill's `name` frontmatter
 - **`src/strands_evals/`**: All production code
-- **`src/strands_evals/cli/`**: `strands-evals` console script — six subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
+- **`src/strands_evals/cli/`**: `strands-evals` console script: seven subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`, `ui`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
 - **`tests/strands_evals/`**: Unit tests mirroring src/ structure
 - **`tests/strands_evals/cli/`**: CLI tests; fixtures live under `cli/fixtures/` and are referenced by tests via `tests.strands_evals.cli.fixtures.*:attr` specs
+- **`tests/ui/`**: jsdom suites that drive the `ui` page; Node, not pytest, and run by hand because CI has no Node toolchain
 - **`tests_integ/`**: Integration tests using real trace providers and model endpoints
 - **`docs are not vendored yet`**: CONTRIBUTING.md and STYLE_GUIDE.md are the canonical references
 
