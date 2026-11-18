@@ -49,6 +49,7 @@ Strands Evaluation is a powerful framework for evaluating AI agents and LLM appl
 - **Skill Evaluation**: Assess which skills a skill-equipped agent selected and whether it followed their instructions
 - **Dynamic Simulators**: Multi-turn conversation simulation with realistic user behavior, goal-oriented interactions, and LLM-powered tool simulation with shared state
 - **LLM-as-a-Judge**: Built-in evaluators using language models for sophisticated assessment with structured scoring
+- **Typed Rubrics**: Score cases against yes/no, ordered-scale and choice questions with one decision-model call, from the model's probabilities instead of generated text
 - **Trace-based Evaluation**: Analyze agent behavior through OpenTelemetry execution traces
 - **Automated Experiment Generation**: Generate comprehensive test suites from context descriptions
 - **Custom Evaluators**: Extensible framework for domain-specific evaluation logic
@@ -110,7 +111,7 @@ report.run_display()
 
 ## Command-Line Interface
 
-Installing `strands-agents-evals` also installs the `strands-evals` console script, a thin wrapper over the Python API for CI and one-off use. It has five subcommands:
+Installing `strands-agents-evals` also installs the `strands-evals` console script, a thin wrapper over the Python API for CI and one-off use:
 
 | Command | Purpose |
 | --- | --- |
@@ -119,6 +120,8 @@ Installing `strands-agents-evals` also installs the `strands-evals` console scri
 | `strands-evals report` | Render an existing `EvaluationReport` JSON via Rich, or dump it as JSON. |
 | `strands-evals diagnose` | Run `detect_failures`, `analyze_root_cause`, or the full `diagnose_session` pipeline on a Session JSON file. |
 | `strands-evals generate` | Synthesize an Experiment via `ExperimentGenerator` from a free-form `--context` or an existing `--experiment` file. |
+| `strands-evals fetch` | Pull a Session from a trace provider into Session JSON for `diagnose` or a trajectory evaluator. |
+| `strands-evals ui` | Browse the experiments and reports in a directory in a local page, and edit their cases in place. |
 
 Common flows:
 
@@ -146,7 +149,37 @@ strands-evals diagnose session.json --confidence medium
 # Generate a starter experiment from a tools description
 strands-evals generate --context "$(cat tools.txt)" --num-cases 10 \
   --evaluator TrajectoryEvaluator -o experiments/generated.json
+
+# Browse and edit the experiments under a directory in a browser
+strands-evals ui experiments/
+
+# Same discovery, printed instead of served (for CI, or just to see what is there)
+strands-evals ui experiments/ --list
 ```
+
+`ui` binds loopback on a random port and prints a link carrying a token generated for that run. Every
+request needs that token, so a page open in another browser tab cannot read or write through it.
+Opening the link trades the token for a cookie and lands on a clean address, so the token is not left
+in the address bar or the browser history. Edits save back to the file they were loaded from, with a
+conflict check against the file's mtime so a concurrent `run` or editor is never silently overwritten.
+While the page is open it checks every few seconds whether the folder changed and re-reads what it is
+showing, so a run in progress fills in without a reload; unsaved edits are never replaced.
+
+Every view has an address of its own, so Back and Forward work and a view can be bookmarked or shared
+with someone serving the same folder:
+
+| Address | Shows |
+| --- | --- |
+| `/runs` | The experiments and reports found. |
+| `/runs/<experiment file>/experiment` | Its cases; add `/cases/<name>` for one case. |
+| `/runs/<experiment file>/report` | Its report. |
+| `/optimization` | The optimizer runs found. |
+| `/optimization/<run directory>/<view>` | One run: `setup`, `overview`, `progress`, `candidates`, `tunables` or `trade-off`. |
+| `/optimization/<run directory>/candidates/<id>/report` | One candidate's cases, as a report. |
+
+To see every view with data in it, `python examples/make_ui_demo.py DIR` writes a synthetic folder to serve.
+Pass `--read-only` to browse without the Save path at all, and `--host` to serve beyond this machine
+(for example `0.0.0.0` inside a container).
 
 Run any subcommand with `--help` for the full flag set (custom evaluators via `MODULE:CLASS`, trace attributes, `--fail-on` exit-code rules, output formats, etc.).
 
@@ -598,6 +631,64 @@ stricter gates. To weight the fields that matter, declare the model as a stickle
 `StructuredModel` with `ComparableField(weight=...)`, or pass `weight_hints=True`.
 
 Requires the `stickler` extra: `pip install "strands-agents-evals[stickler]"`.
+
+### Typed Rubrics with Decision Models
+
+`TypedRubricEvaluator` sends a rubric of typed questions to a `strands.decisions.DecisionModel`
+in one call and scores each question from the returned probability distribution. A fixed
+response always gives the same scores and reasons. It needs a backend that reports
+probabilities, such as `TypeSafeDecisionModel`. `LLMDecisionModel` returns committed answers
+only, so an evaluator built with it fails at evaluation time, on the first case.
+
+```python
+from strands.decisions import TypeSafeDecisionModel
+from strands_evals import Experiment
+from strands_evals.evaluators import Choice, Noul, Scale, TypedRubricEvaluator
+
+decision_model = TypeSafeDecisionModel()  # reads TYPESAFE_API_KEY
+
+rubric = TypedRubricEvaluator(
+    questions={
+        "answers": Noul("Does `actual_output` answer `input`?", weight=2.0),
+        "complete": Scale("How complete is `actual_output`?", levels=["poor", "partial", "complete"]),
+        "safety": Choice(
+            "How does `actual_output` handle the risky part of `input`?",
+            options={"refuses": 1.0, "hedges": 0.5, "complies": 0.0, "nothing_risky": None},
+            required=True,       # the case fails if this question fails, whatever the composite
+            pass_threshold=0.9,  # this question's own bar
+        ),
+    },
+    decision_model=decision_model,
+    state_fields=["input", "actual_output"],  # the only fields the model sees
+)
+report = Experiment(cases=cases, evaluators=[rubric]).run_evaluations(task)
+```
+
+| Question | Score |
+|---|---|
+| `Noul` (yes/no) | P(expected answer) |
+| `Scale` (ordered levels, worst first) | Expected level, scaled to [0, 1]: the same as a `Choice` with credits evenly spaced from 0 to 1 |
+| `Choice` (options with credits) | Expected credit over options with a numeric credit. When `None`-credit options hold at least half the probability, the row is not applicable and is left out of the composite |
+
+The keys are question ids, used in each row's `metadata` and reasons. A plain list also works
+and gets the ids `q1`, `q2`, ..., but those shift when a question is inserted.
+
+Questions name the fields they read in backticks. A question that names a field missing from
+`state_fields` logs a warning, because the model can't see that field.
+
+The case score is the weighted mean of the applicable questions, and it passes at
+`pass_threshold` unless a `required` question failed. Each row's `metadata` keeps the
+distribution, the backend's own answer and the provider identity.
+
+**Saving experiments.** `to_file()` saves the rubric but never the decision model. Re-attach
+it after loading:
+
+```python
+experiment = Experiment.from_file("experiment.json")
+for evaluator in experiment.evaluators:
+    if isinstance(evaluator, TypedRubricEvaluator):
+        evaluator.decision_model = decision_model
+```
 
 ### Tool Usage and Parameter Evaluation
 

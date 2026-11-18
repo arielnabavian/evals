@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.4.0,<3.0.0",
     "rich>=15.0.0,<16.0.0",
-    "strands-agents>=1.45.0",
+    "strands-agents>=1.64.0",
     "typing-extensions>=4.13.2,<5.0.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
@@ -78,6 +78,8 @@ optimization = [
     "numpy>=1.26.0,<3.0.0",
     "scipy>=1.11.0,<2.0.0",
     "optuna>=5.0.0,<6.0.0",
+    "tomli>=2.0.0,<3.0.0; python_version < '3.11'",  # `strands-evals optimize run FILE.toml` on 3.10
+    "strands-harness>=0.4.0,<0.5.0",  # `strands-evals optimize --config`
 ]
 
 [tool.ruff]
@@ -170,6 +172,7 @@ select = [
 "src/strands_evals/detectors/prompt_templates/*" = ["E501"] # line-length
 "src/strands_evals/generators/prompt_template/*" = ["E501"] # line-length
 "src/strands_evals/redteam/**/prompt_templates/**" = ["E501"] # line-length
+"tests/ui/fixtures/*" = ["T201"] # a hand-run generator script, whose output is its report
 
 [tool.mypy]
 # Disable strict checks that cause false positives with Generic classes

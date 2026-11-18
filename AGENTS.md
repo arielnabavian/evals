@@ -40,6 +40,7 @@ strands-evals depends on **`strands-agents`** (the Python SDK) for all LLM inter
   - `strands.types.content.Message`
   - `strands.types.exceptions` (`EventLoopException`, `ModelThrottledException`)
   - `strands.Skill` (public, exported in `strands.__all__` from `strands.vended_plugins.skills.skill`), used by the skill extractors to read `SKILL.md` frontmatter
+  - `strands.decisions` (`DecisionModel`, `DecisionResult`, `Question`, `Uncertain`), used by `TypedRubricEvaluator`; it reads the per-question `probabilities` in `DecisionResult.metadata`
 - **Not used as SDK imports (do not add to the list without verifying a real import):**
   - `strands.types.traces` — this repo defines its own `strands_evals.types.trace` for session/span modeling; the SDK's trace types are not imported.
   - `strands.telemetry` — the evals repo has its own `strands_evals.telemetry` module. The only reference to `strands.telemetry` is the literal string `"strands.telemetry.tracer"` used as an OpenTelemetry scope name in `mappers/constants.py`.
@@ -52,9 +53,10 @@ strands-evals depends on **`strands-agents`** (the Python SDK) for all LLM inter
 strands-evals/
 │
 ├── .agents/skills/                           # Agent skills (not shipped in the wheel)
-│   └── session-converter/                  # Convert local agent sessions into experiments
-│       ├── SKILL.md                          # Locate sessions, extract episodes
-│       └── assets/segmenter.md               # Subagent steps: split sessions into episodes
+│   └── session-converter/                  # Convert agent sessions into experiments
+│       ├── SKILL.md                          # Locate sessions, extract episodes, write an experiment
+│       ├── assets/segmenter.md               # Subagent steps: split sessions into episodes
+│       └── scripts/synthesize_cases.py       # Append synthetic cases in the existing cases' voice
 │
 ├── src/strands_evals/                        # Main package source code
 │   ├── __init__.py                           # Public API exports
@@ -84,6 +86,7 @@ strands-evals/
 │   │   ├── tool_parameter_accuracy_evaluator.py
 │   │   ├── tool_selection_accuracy_evaluator.py
 │   │   ├── trajectory_evaluator.py
+│   │   ├── typed_rubric_evaluator.py         # TypedRubricEvaluator (DecisionModel-backed) + scoring formulas
 │   │   ├── multimodal_*.py                   # Multimodal evaluators (MLLM-as-a-Judge)
 │   │   ├── chaos/                            # Chaos-aware evaluators
 │   │   │   ├── failure_communication_evaluator.py
@@ -213,13 +216,22 @@ strands-evals/
 │   │   ├── _entrypoint.py                    # `module:attr` resolver + classifier
 │   │   ├── _agent_task.py                    # synthesize_task_function (baggage-tagged)
 │   │   ├── _io.py                            # stdin/stdout/file helpers
+│   │   ├── _ui_server.py                     # loopback HTTP server behind `ui`: discovery, pairing, guarded writes
+│   │   ├── assets/                           # the `ui` page; no build step, inlined into one document when served
+│   │   │   ├── ui.html                       # markup
+│   │   │   ├── ui.css                        # Strands theme tokens and components
+│   │   │   └── ui-*.js                       # one classic script per concern, loaded in the order ui.html lists
+│   │   ├── _optimize.py                      # `optimize`: flags -> Optimizer, cli.json, the .toml run file
+│   │   ├── _harness.py                       # `optimize --config`: a strands-harness portable config as the agent
 │   │   └── commands/                         # subcommand implementations
 │   │       ├── run.py
 │   │       ├── validate.py
 │   │       ├── report.py
 │   │       ├── diagnose.py
 │   │       ├── generate.py
-│   │       └── fetch.py                      # pull Session JSON from a TraceProvider
+│   │       ├── fetch.py                      # pull Session JSON from a TraceProvider
+│   │       ├── ui.py                         # browse and edit experiments, reports and optimizer runs
+│   │       └── optimize.py                   # `optimize run` / `optimize resume`
 │   │
 │   ├── __main__.py                           # `python -m strands_evals` shim → cli.main
 │   │
@@ -230,6 +242,7 @@ strands-evals/
 │       ├── detector.py                       # FailureItem, RCAItem, DiagnosisResult, ...
 │       ├── multimodal.py
 │       ├── optimization/                     # Frozen pydantic records the optimizer saves (trials, scores, events)
+│       ├── typed_rubric.py                   # Noul / Scale / Choice rubric question types (pydantic dataclasses)
 │       ├── redteam/
 │       │   ├── config.py                     # AttackGoal, RedTeamConfig, Severity
 │       │   ├── risk_category.py              # RISK_CATEGORIES, DEFAULT_SEVERITY
@@ -261,7 +274,11 @@ strands-evals/
 │       ├── optimization/
 │       └── redteam/
 │
+├── tests/ui/                                 # jsdom suites for the `ui` page (Node, run by hand; see its README)
+│
 ├── tests_integ/                              # Integration tests (real providers)
+│
+├── examples/                                 # Sample experiments, and `make_ui_demo.py` to fill every `ui` view
 │
 ├── pyproject.toml
 ├── README.md
@@ -274,9 +291,10 @@ strands-evals/
 
 - **`.agents/skills/`**: Agent skills, one directory per skill containing a `SKILL.md`; the folder name must match the skill's `name` frontmatter
 - **`src/strands_evals/`**: All production code
-- **`src/strands_evals/cli/`**: `strands-evals` console script — six subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
+- **`src/strands_evals/cli/`**: `strands-evals` console script — eight subcommands (`run`, `validate`, `report`, `diagnose`, `generate`, `fetch`, `optimize`, `ui`) plus the `module:attr` resolver and synthesized task wrapper used by `--agent`. `optimize` (`run` / `resume`, built in `_optimize.py`) imports `strands_evals.optimization` only when invoked, since it needs the `optimization` extra. `fetch` has per-provider sub-subcommands (`cloudwatch`, `langfuse`, `opensearch`); langfuse / opensearch are imported lazily so they only fail when invoked without their extra installed.
 - **`tests/strands_evals/`**: Unit tests mirroring src/ structure
 - **`tests/strands_evals/cli/`**: CLI tests; fixtures live under `cli/fixtures/` and are referenced by tests via `tests.strands_evals.cli.fixtures.*:attr` specs
+- **`tests/ui/`**: jsdom suites that drive the `ui` page; Node, not pytest, and run by hand because CI has no Node toolchain
 - **`tests_integ/`**: Integration tests using real trace providers and model endpoints
 - **`docs are not vendored yet`**: CONTRIBUTING.md and STYLE_GUIDE.md are the canonical references
 
@@ -518,7 +536,7 @@ If you are an agent opening a PR on behalf of a contributor, the human is the au
 
 When reviewing a PR in this repo, scan for all of the following:
 
-1. **Evaluator changes**: confirm the class still extends `Evaluator[InputT, OutputT]`, still returns `list[EvaluationOutput]`, and still uses `Agent(...)` for LLM calls. Confirm the default model has not silently regressed from the current default.
+1. **Evaluator changes**: confirm the class still extends `Evaluator[InputT, OutputT]`, still returns `list[EvaluationOutput]`, and still uses `Agent(...)` for LLM calls. Decision-model evaluators (`TypedRubricEvaluator`) are the exception: they call a `strands.decisions.DecisionModel` and make no `Agent` call. Confirm the default model has not silently regressed from the current default.
 2. **Prompt changes**: check that a new version module (`{name}_v1.py`) was added rather than overwriting `_v0.py`, if the PR is billed as a prompt change rather than a bugfix.
 3. **Detector changes**: preserve the text-mode streaming in `failure_detector.py` and the three-tier fallback in `root_cause_analyzer.py` unless explicitly targeted.
 4. **Session/trace schema**: if the PR changes fields on `Session`, `Trace`, or `SpanUnion`, every mapper in `mappers/` must still produce valid instances. Check each.
