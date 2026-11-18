@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from ...evaluators.evaluator import Evaluator
@@ -20,7 +21,19 @@ from ._temporary_evaluator_catalog import (
     temporary_evaluator_choice,
 )
 from ._temporary_generate_progress import TemporaryGenerateProgress, TemporaryProgressGenerator
-from .temporary_optimize import _count
+
+
+def _count(minimum: int) -> Callable[[str], int]:
+    def parse(raw: str) -> int:
+        try:
+            value = int(raw)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"expected a whole number, got '{raw}'") from e
+        if value < minimum:
+            raise argparse.ArgumentTypeError(f"expected a number of at least {minimum}, got {value}")
+        return value
+
+    return parse
 
 
 def _validate_args(args: argparse.Namespace) -> str | None:

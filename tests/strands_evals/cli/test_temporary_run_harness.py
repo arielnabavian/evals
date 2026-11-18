@@ -7,7 +7,7 @@ from strands_evals.case import Case
 from strands_evals.cli.main import main
 from strands_evals.evaluators.deterministic import Contains, Equals
 from strands_evals.experiment import Experiment
-from tests.strands_evals.cli.test_temporary_optimize import DIRECT_HARNESS, FakeHarness, write_harness
+from tests.strands_evals.cli.test_temporary_task import DIRECT_HARNESS, FakeHarness, write_harness
 from tests.strands_evals.cli.test_temporary_typescript_optimize import DESCRIPTION, RUNNER_COMMAND
 
 

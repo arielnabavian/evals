@@ -1,5 +1,4 @@
 import json
-import logging
 import shutil
 import sys
 import textwrap
@@ -12,9 +11,9 @@ from strands import Agent
 import strands_evals.optimization as optimization
 import strands_evals.optimization.search.blocks as search_blocks
 from strands_evals.case import Case
+from strands_evals.cli import _optimize as cli_optimize
 from strands_evals.cli.commands._temporary_harness import load_temporary_harness_file
 from strands_evals.cli.commands._temporary_model_effort import ModelEffort
-from strands_evals.cli.commands._temporary_objective import parse_temporary_objective, temporary_objective
 from strands_evals.cli.main import main
 from strands_evals.evaluators.deterministic import Contains, Equals
 from strands_evals.experiment import Experiment
@@ -145,6 +144,7 @@ def fake_reflection(monkeypatch):
     FakeReflection.models = []
     monkeypatch.setattr(optimization, "Reflection", FakeReflection)
     monkeypatch.setattr(search_blocks, "Reflection", FakeReflection)
+    monkeypatch.setattr(cli_optimize, "Reflection", FakeReflection)
     return FakeReflection
 
 
@@ -195,8 +195,90 @@ def write_harness(directory: Path, source: str, name: str = "agent.py") -> Path:
     return path
 
 
+TASK_SOURCE = """from strands_evals.cli.commands._temporary_task import temporary_task
+
+_task = temporary_task(
+    {agent!r},
+    experiment_file={experiment!r},
+    space_file={space!r},
+    settings={settings!r},
+    typescript_runner={runner!r},
+    baseline_only={baseline!r},
+)
+agent = _task.agent
+rollout = _task.rollout
+search = _task.search
+"""
+RENAMED_FLAGS = {
+    "--record": "--base-dir",
+    "--width": "--proposals-per-iteration",
+    "--repetitions": "--runs-per-candidate",
+    "--max-concurrency": "--max-workers",
+    "--rewriter-model": "--reflection-model",
+}
+STRANDS_DEV_SETTINGS = {
+    "--split": "0.5,0.25,0.25",
+    "--proposals-per-iteration": "4",
+    "--runs-per-candidate": "1",
+    "--max-workers": "4",
+    "--max-rollouts": "500",
+    "--seed": "0",
+}
+SWITCHES = {"--json", "--rich"}
+
+
+def forget_task_modules() -> None:
+    for name in [name for name in sys.modules if name.startswith("_strands_evals_cli_task_")]:
+        del sys.modules[name]
+
+
+def write_task(directory: Path, agent: str, experiment: str, **options) -> Path:
+    path = directory / "task.py"
+    path.write_text(TASK_SOURCE.format(agent=agent, experiment=experiment, **options))
+    forget_task_modules()
+    return path
+
+
+def run_arguments(arguments: tuple[str, ...]) -> list[str]:
+    experiment, *rest = arguments
+    options = {"settings": ("instructions",), "space": None, "runner": None}
+    iterations, agent, flags = "4", None, []
+    pairs = iter(rest)
+    for flag in pairs:
+        if flag in SWITCHES:
+            flags.append(flag)
+            continue
+        value = next(pairs)
+        if flag == "--agent":
+            agent = value
+        elif flag == "--tune":
+            options["settings"] = tuple(value.split(","))
+        elif flag == "--space":
+            options["space"] = value
+        elif flag == "--typescript-runner":
+            options["runner"] = value
+        elif flag == "--iterations":
+            iterations = value
+        elif flag == "--maximize":
+            flags += ["--objective", f"maximize:{value}"]
+        elif flag in ("--at-most", "--at-least"):
+            metric, limit = value.split("=")
+            flags += ["--constraint", f"{metric}{'<=' if flag == '--at-most' else '>='}{limit}"]
+        else:
+            flags += [RENAMED_FLAGS.get(flag, flag), value]
+    for flag, value in STRANDS_DEV_SETTINGS.items():
+        if flag not in flags:
+            flags += [flag, value]
+    baseline = iterations == "0"
+    record = Path(flags[flags.index("--base-dir") + 1])
+    task = write_task(record.parent, agent, experiment, baseline=baseline, **options)
+    route = ["--agent", f"{task}:agent", "--rollout", f"{task}:rollout"]
+    route += ["--search", f"{task}:search"] if baseline else ["--max-iterations", iterations]
+    return ["run", experiment, *route, *flags]
+
+
 def optimize(*arguments: str) -> int:
-    return main(["optimize", *arguments])
+    return main(["optimize", *run_arguments(arguments)])
 
 
 def optimize_harness(tmp_path: Path, source: str, *flags: str, cases: int = 4, evaluators=None) -> int:
@@ -355,9 +437,9 @@ def test_should_print_a_summary_when_the_output_is_rich(harness, tmp_path, capsy
     code = optimize_harness(tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "1", "--rich")
 
     assert code == 0
-    output = capsys.readouterr().out
-    assert output.startswith(f"Run {run_dir(tmp_path).name}")
-    assert output.rstrip().endswith(f"record: {run_dir(tmp_path)}")
+    captured = capsys.readouterr()
+    assert captured.out.startswith(f"Run {run_dir(tmp_path).name}")
+    assert f"run folder {run_dir(tmp_path)}" in captured.err
 
 
 def test_should_maximize_every_evaluator_when_no_metric_is_given(harness, tmp_path):
@@ -392,23 +474,7 @@ def test_should_use_the_given_goals_when_maximize_and_at_most_are_given(harness,
     assert config["constraints"] == ["tokens <= 500"]
 
 
-@pytest.mark.parametrize(
-    ("expression", "stored"),
-    [
-        ("Minimize(tokens)", "Minimize(tokens)"),
-        ('Maximize("Equals")', "Maximize(Equals)"),
-        (
-            "WeightedSum(Maximize(Contains), Minimize(tokens, scale=1000))",
-            "WeightedSum(Maximize(Contains), Minimize(tokens, scale=1000))",
-        ),
-        (
-            "Pareto(Maximize(Contains, weight=2), Minimize(seconds, scale=10))",
-            "Pareto(Maximize(Contains, weight=2), Minimize(seconds, scale=10))",
-        ),
-        (" Maximize( Equals ) ", "Maximize(Equals)"),
-    ],
-)
-def test_should_use_the_objective_in_the_api_notation_when_objective_is_given(harness, tmp_path, expression, stored):
+def test_should_keep_every_constraint_in_order_when_at_least_and_at_most_are_given(harness, tmp_path):
     evaluators = [Contains(value="effort high"), Equals(value="effort high")]
 
     code = optimize_harness(
@@ -417,39 +483,7 @@ def test_should_use_the_objective_in_the_api_notation_when_objective_is_given(ha
         "--tune",
         "effort",
         "--objective",
-        expression,
-        "--iterations",
-        "0",
-        evaluators=evaluators,
-    )
-
-    assert code == 0
-    assert config_of(tmp_path)["objective"] == stored
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "Maximize(Equals)",
-        "Minimize(tokens)",
-        "WeightedSum(Maximize(Contains, weight=2), Minimize(tokens, scale=1000))",
-        "Pareto(Maximize(Contains), Minimize(seconds, weight=0.5, scale=10))",
-    ],
-)
-def test_should_write_the_same_text_as_the_api_when_an_objective_is_parsed(text):
-    assert str(temporary_objective(parse_temporary_objective(text), optimization)) == text
-
-
-def test_should_keep_every_limit_when_at_least_and_at_most_are_given(harness, tmp_path):
-    evaluators = [Contains(value="effort high"), Equals(value="effort high")]
-
-    code = optimize_harness(
-        tmp_path,
-        DIRECT_HARNESS,
-        "--tune",
-        "effort",
-        "--objective",
-        "Minimize(tokens)",
+        "minimize:tokens",
         "--at-least",
         "Contains=0.8",
         "--at-most",
@@ -462,83 +496,13 @@ def test_should_keep_every_limit_when_at_least_and_at_most_are_given(harness, tm
     assert code == 0
     config = config_of(tmp_path)
     assert config["objective"] == "Minimize(tokens)"
-    assert config["constraints"] == ["seconds <= 30", "Contains >= 0.8"]
-
-
-@pytest.mark.parametrize(
-    ("expression", "named"),
-    [
-        ("Maximize(Contains", "Maximize(Contains"),
-        ("Foo(Contains)", "Foo"),
-        ("Maximize(Contains, temperature=2)", "temperature"),
-        ("__import__('os').system('true')", "__import__"),
-        ("Maximize(1)", "1"),
-        ("Maximize(Contains, weight=two)", "two"),
-        ("Maximize(Contains, weight=True)", "True"),
-        ("Maximize(Contains, weight=-1)", "-1"),
-        ("Contains", "Contains"),
-        ("WeightedSum(Contains)", "Contains"),
-        ("WeightedSum(Maximize(Contains), weight=2)", "weight"),
-    ],
-)
-def test_should_exit_with_bad_input_and_name_the_bad_part_when_the_objective_is_not_in_the_api_notation(
-    tmp_path, capsys, expression, named
-):
-    experiment = write_experiment(tmp_path)
-
-    with pytest.raises(SystemExit) as raised:
-        optimize(
-            str(experiment), "--agent", "agent.py", "--record", str(tmp_path / "record"), "--objective", expression
-        )
-
-    assert raised.value.code == 2
-    assert named in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("flags", "message"),
-    [
-        (["--objective", "Maximize(Nope)"], "unknown metric 'Nope'"),
-        (["--objective", "WeightedSum(Maximize(Contains), Minimize(tokens))"], "give each a scale="),
-        (["--objective", "Maximize(Contains, weight=2)"], "drop them"),
-    ],
-)
-def test_should_exit_with_bad_input_and_the_api_reason_when_the_objective_does_not_fit_the_experiment(
-    harness, tmp_path, capsys, flags, message
-):
-    evaluators = [Contains(value="effort high"), Equals(value="effort high")]
-
-    code = optimize_harness(
-        tmp_path, DIRECT_HARNESS, "--tune", "effort", *flags, "--iterations", "0", evaluators=evaluators
-    )
-
-    assert code == 2
-    assert message in capsys.readouterr().err
-
-
-def test_should_exit_with_bad_input_when_both_maximize_and_objective_are_given(tmp_path):
-    experiment = write_experiment(tmp_path)
-
-    with pytest.raises(SystemExit) as raised:
-        optimize(
-            str(experiment),
-            "--agent",
-            "agent.py",
-            "--record",
-            str(tmp_path / "record"),
-            "--maximize",
-            "Contains",
-            "--objective",
-            "Maximize(Contains)",
-        )
-
-    assert raised.value.code == 2
+    assert config["constraints"] == ["Contains >= 0.8", "seconds <= 30"]
 
 
 def test_should_rewrite_instructions_with_the_given_model_when_rewriter_model_is_given(
     harness, tmp_path, fake_reflection
 ):
-    code = optimize_harness(tmp_path, DIRECT_HARNESS, "--rewriter-model", "rewriter-x", "--iterations", "0")
+    code = optimize_harness(tmp_path, DIRECT_HARNESS, "--rewriter-model", "rewriter-x", "--iterations", "1")
 
     assert code == 0
     assert fake_reflection.models == ["rewriter-x"]
@@ -546,14 +510,13 @@ def test_should_rewrite_instructions_with_the_given_model_when_rewriter_model_is
     assert [block["keys"] for block in blocks if block["proposer"] == "FakeReflection"] == [["instructions"]]
 
 
-def test_should_ignore_the_rewriter_model_when_no_setting_is_text(harness, tmp_path, caplog, fake_reflection):
-    with caplog.at_level(logging.WARNING, logger="strands_evals"):
-        code = optimize_harness(
-            tmp_path, DIRECT_HARNESS, "--tune", "effort", "--rewriter-model", "rewriter-x", "--iterations", "0"
-        )
+def test_should_refuse_the_rewriter_model_when_no_setting_is_text(harness, tmp_path, capsys, fake_reflection):
+    code = optimize_harness(
+        tmp_path, DIRECT_HARNESS, "--tune", "effort", "--rewriter-model", "rewriter-x", "--iterations", "1"
+    )
 
-    assert code == 0
-    assert "no text to rewrite" in caplog.text
+    assert code == 2
+    assert "nothing tuned is text" in capsys.readouterr().err
     assert fake_reflection.models == []
 
 
@@ -576,29 +539,28 @@ def test_should_exit_with_a_runtime_error_when_every_baseline_trial_fails(harnes
     assert code == 3
     error = capsys.readouterr().err
     assert "the agent cannot be built" in error
-    assert "check that it can answer one of the cases in a strands dev chat" in error
 
 
 @pytest.mark.parametrize(
     ("split", "message"),
     [
-        ("0.1,0.45,0.45", "Add more cases to the experiment, or pass a --split"),
-        ("0.5,0.5,0.5", "Fix --split so that the three shares sum to 1"),
-        ("0,0.5,0.5", "Give train and validation a share above 0 in --split"),
+        ("0.1,0.45,0.45", "at least 1 is needed"),
+        ("0.5,0.5,0.5", "sum"),
+        ("0,0.5,0.5", "above 0"),
     ],
 )
-def test_should_suggest_a_fix_for_the_split_when_its_shares_do_not_work(harness, tmp_path, capsys, split, message):
+def test_should_name_the_split_problem_when_its_shares_do_not_work(harness, tmp_path, capsys, split, message):
     code = optimize_harness(tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "0", "--split", split)
 
     assert code == 2
     assert message in capsys.readouterr().err
 
 
-def test_should_suggest_a_larger_budget_when_the_baseline_and_the_end_phase_do_not_fit(harness, tmp_path, capsys):
+def test_should_name_the_budget_problem_when_the_baseline_and_the_end_phase_do_not_fit(harness, tmp_path, capsys):
     code = optimize_harness(tmp_path, DIRECT_HARNESS, "--tune", "effort", "--max-rollouts", "3")
 
     assert code == 2
-    assert "Pass a larger --max-rollouts" in capsys.readouterr().err
+    assert "can't cover the baseline" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -606,7 +568,7 @@ def test_should_suggest_a_larger_budget_when_the_baseline_and_the_end_phase_do_n
     [
         ("{not json", "is not a usable Experiment file (JSONDecodeError"),
         (json.dumps({"evaluators": []}), "is not a usable Experiment file (KeyError"),
-        (json.dumps({"cases": [], "evaluators": [{"evaluator_type": "Equals"}]}), "Add more cases to the experiment"),
+        (json.dumps({"cases": [], "evaluators": [{"evaluator_type": "Equals"}]}), "at least 1 is needed"),
     ],
 )
 def test_should_name_the_experiment_file_and_its_fix_when_it_cannot_be_used(
@@ -636,35 +598,6 @@ def test_should_point_to_strands_dev_when_the_agent_file_fails_to_import(
     error = capsys.readouterr().err
     assert "the agent is broken" in error
     assert "strands dev shows the same error when it opens this agent" in error
-
-
-def test_should_refuse_the_record_before_loading_the_agent_when_it_holds_a_run(harness, tmp_path, capsys):
-    (tmp_path / "record").mkdir()
-    (tmp_path / "record" / "events.jsonl").write_text('{"event": "config"}\n')
-
-    code = optimize_harness(tmp_path, DIRECT_HARNESS, "--iterations", "0")
-
-    assert code == 2
-    assert "must be a new or empty directory" in capsys.readouterr().err
-    assert harness.calls == []
-
-
-def test_should_tune_a_tunable_factory_when_given_module_attr(tmp_path):
-    experiment = write_experiment(tmp_path)
-
-    code = optimize(
-        str(experiment),
-        "--agent",
-        f"{FACTORY}:create_agent",
-        "--record",
-        str(tmp_path / "record"),
-        "--iterations",
-        "1",
-        "--json",
-    )
-
-    assert code == 0
-    assert list(space_of(tmp_path)) == ["style"]
 
 
 @pytest.mark.parametrize(
@@ -734,45 +667,6 @@ def test_should_reject_the_harness_file_when_it_cannot_build_fresh_agents(
 
     assert code == 2
     assert message in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("agent", "message"),
-    [
-        (f"{FACTORY}:plain_factory", "must name a @tunable factory"),
-        (f"{FACTORY}:create_agent --tune effort", "--tune applies"),
-    ],
-)
-def test_should_reject_the_agent_when_module_attr_is_not_a_tunable_factory_or_takes_tune(
-    tmp_path, capsys, agent, message
-):
-    experiment = write_experiment(tmp_path)
-
-    code = optimize(str(experiment), "--agent", *agent.split(), "--record", str(tmp_path / "record"))
-
-    assert code == 2
-    assert message in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    "flags",
-    [
-        ["--tune", "temperature"],
-        ["--split", "0.5,0.5"],
-        ["--at-most", "tokens"],
-        ["--at-least", "Contains"],
-        ["--iterations", "-1"],
-        ["--width", "0"],
-        ["--max-rollouts", "0"],
-    ],
-)
-def test_should_exit_with_bad_input_when_a_flag_is_invalid(tmp_path, flags):
-    experiment = write_experiment(tmp_path)
-
-    with pytest.raises(SystemExit) as raised:
-        optimize(str(experiment), "--agent", "agent.py", "--record", str(tmp_path / "record"), *flags)
-
-    assert raised.value.code == 2
 
 
 @pytest.mark.parametrize(
@@ -917,7 +811,7 @@ def test_should_rewrite_every_text_variable_when_a_space_file_and_a_rewriter_mod
         },
     ]
 
-    code = optimize_space(tmp_path, space, "--rewriter-model", "rewriter-x")
+    code = optimize_space(tmp_path, space, "--rewriter-model", "rewriter-x", "--iterations", "1")
 
     assert code == 0
     blocks = config_of(tmp_path)["search"]["blocks"]
@@ -1042,48 +936,14 @@ def test_should_refuse_to_tune_instructions_from_a_space_file_when_the_agent_pas
     assert len(harness.calls) == 1
 
 
-def test_should_reject_a_space_file_when_the_agent_is_a_tunable_factory(tmp_path, capsys):
-    experiment = write_experiment(tmp_path)
-    space = write_space(tmp_path, SPACE)
-
-    code = optimize(
-        str(experiment),
-        "--agent",
-        f"{FACTORY}:create_agent",
-        "--record",
-        str(tmp_path / "record"),
-        "--space",
-        str(space),
+def resume(target: Path, *flags: str) -> int:
+    runs = (
+        [target]
+        if (target / "run.json").is_file()
+        else sorted(p for p in target.iterdir() if (p / "run.json").is_file())
     )
-
-    assert code == 2
-    assert "--space applies to a harness file" in capsys.readouterr().err
-
-
-def test_should_exit_with_bad_input_when_both_tune_and_space_are_given(tmp_path, capsys):
-    experiment = write_experiment(tmp_path)
-    space = write_space(tmp_path, SPACE)
-
-    with pytest.raises(SystemExit) as raised:
-        optimize(
-            str(experiment),
-            "--agent",
-            "agent.py",
-            "--record",
-            str(tmp_path / "record"),
-            "--tune",
-            "effort",
-            "--space",
-            str(space),
-        )
-
-    assert raised.value.code == 2
-    assert "argument --space: not allowed with argument --tune" in capsys.readouterr().err
-
-
-def resume(tmp_path: Path, target: Path, *flags: str) -> int:
-    experiment, agent = tmp_path / "experiment.json", tmp_path / "agent.py"
-    return optimize(str(experiment), "--agent", str(agent), "--resume", str(target), *flags)
+    forget_task_modules()
+    return main(["optimize", "resume", str(runs[0] if runs else target), *flags])
 
 
 def stop_after_the_first_step(run: Path, copy: Path) -> Path:
@@ -1091,6 +951,8 @@ def stop_after_the_first_step(run: Path, copy: Path) -> Path:
     first_end = [json.loads(line)["event"] for line in lines].index("iteration_end")
     shutil.copytree(run, copy)
     (copy / "events.jsonl").write_text("\n".join(lines[: first_end + 1]) + "\n")
+    for finished in ("result.json", "best.values.json", "best.diff"):
+        (copy / finished).unlink(missing_ok=True)
     return copy
 
 
@@ -1104,7 +966,7 @@ def test_should_continue_a_stopped_run_to_the_same_result_when_resume_is_given(h
     finished = json.loads(capsys.readouterr().out)
     stopped = stop_after_the_first_step(run_dir(tmp_path), tmp_path / "stopped" / run_dir(tmp_path).name)
 
-    code = resume(tmp_path, stopped, *flags)
+    code = resume(stopped, "--json")
 
     assert code == 0
     resumed = json.loads(capsys.readouterr().out)
@@ -1119,7 +981,7 @@ def test_should_return_the_result_without_new_trials_when_the_resumed_run_had_fi
     finished = json.loads(capsys.readouterr().out)
     trials = trial_count(run_dir(tmp_path) / "events.jsonl")
 
-    code = resume(tmp_path, tmp_path / "record", *flags)
+    code = resume(tmp_path / "record", "--json")
 
     assert code == 0
     assert json.loads(capsys.readouterr().out)["validation"] == finished["validation"]
@@ -1131,31 +993,31 @@ def test_should_ask_for_a_new_run_when_the_resume_folder_holds_no_run(harness, t
     write_harness(tmp_path, DIRECT_HARNESS)
     (tmp_path / "record").mkdir()
 
-    code = resume(tmp_path, tmp_path / "record", "--tune", "effort")
+    code = resume(tmp_path / "record")
 
     assert code == 2
-    assert "holds no run to continue. Or start the optimization again with --record DIR." in capsys.readouterr().err
+    assert "is not a run folder" in capsys.readouterr().err
     assert harness.calls == []
 
 
 def test_should_refuse_to_resume_when_the_tuned_settings_changed(harness, tmp_path, capsys):
-    assert optimize_harness(tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "1", "--json") == 0
+    assert optimize_harness(tmp_path, DIRECT_HARNESS, "--tune", "effort", "--iterations", "2", "--json", cases=8) == 0
     capsys.readouterr()
+    stopped = stop_after_the_first_step(run_dir(tmp_path), tmp_path / "stopped" / run_dir(tmp_path).name)
+    write_task(
+        tmp_path,
+        str(tmp_path / "agent.py"),
+        str(tmp_path / "experiment.json"),
+        settings=("instructions",),
+        space=None,
+        runner=None,
+        baseline=False,
+    )
 
-    code = resume(tmp_path, run_dir(tmp_path), "--tune", "instructions", "--iterations", "1")
+    code = resume(stopped)
 
     assert code == 2
-    assert "start a new run with --record DIR" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("target", [["--record", "first", "--resume", "second"], []])
-def test_should_exit_with_bad_input_when_record_and_resume_do_not_name_one_run(tmp_path, target):
-    experiment = write_experiment(tmp_path)
-
-    with pytest.raises(SystemExit) as raised:
-        optimize(str(experiment), "--agent", "agent.py", *target)
-
-    assert raised.value.code == 2
+    assert "changed" in capsys.readouterr().err
 
 
 def test_should_tune_effort_on_copies_of_the_model_when_the_agent_builds_a_bedrock_model(model_harness, tmp_path):

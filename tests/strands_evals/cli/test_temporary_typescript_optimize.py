@@ -8,9 +8,9 @@ import pytest
 
 from strands_evals.case import Case
 from strands_evals.cli.commands._temporary_typescript_runner import TypeScriptRunner
-from strands_evals.cli.main import main
 from strands_evals.evaluators.deterministic import Contains
 from strands_evals.experiment import Experiment
+from tests.strands_evals.cli.test_temporary_task import optimize
 
 RUNNER = Path(__file__).parent / "fixtures" / "temporary_typescript_runner.py"
 RUNNER_COMMAND = f"{shlex.quote(sys.executable)} {shlex.quote(str(RUNNER))}"
@@ -43,18 +43,7 @@ def optimize_typescript(tmp_path, monkeypatch, *flags, description=None, runner=
     agent = tmp_path / "agent.ts"
     agent.write_text("export const agent = createHarness({})\n")
     runner_flags = ["--typescript-runner", runner] if runner else []
-    return main(
-        [
-            "optimize",
-            str(experiment),
-            "--agent",
-            str(agent),
-            "--record",
-            str(tmp_path / "record"),
-            *runner_flags,
-            *flags,
-        ]
-    )
+    return optimize(str(experiment), "--agent", str(agent), "--record", str(tmp_path / "record"), *runner_flags, *flags)
 
 
 def run_dir(tmp_path) -> Path:
@@ -168,7 +157,7 @@ def test_should_ask_for_the_runner_when_a_typescript_agent_has_none(tmp_path, mo
     code = optimize_typescript(tmp_path, monkeypatch, runner=None)
 
     assert code == 2
-    assert "--typescript-runner" in capsys.readouterr().err
+    assert "give typescript_runner, the command that starts its runner" in capsys.readouterr().err
 
 
 def test_should_report_the_runner_command_when_it_cannot_start(tmp_path, monkeypatch, capsys):
